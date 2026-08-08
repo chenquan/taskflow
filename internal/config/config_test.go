@@ -83,14 +83,14 @@ func TestValidateCycle(t *testing.T) {
 		t.Fatal("expected cycle")
 	}
 }
-func TestValidateRejectsNonGitSource(t *testing.T) {
+func TestValidateAllowsExistingNonGitSourceStructurally(t *testing.T) {
 	d := t.TempDir()
 	v := task(d)
-	if Validate(&v) == nil {
-		t.Fatal("expected non-git source rejection")
+	if err := Validate(&v); err != nil {
+		t.Fatalf("structural validation unexpectedly inspected Git: %v", err)
 	}
 }
-func TestValidateRejectsBareGitSource(t *testing.T) {
+func TestValidateAllowsBareGitSourceStructurally(t *testing.T) {
 	root := t.TempDir()
 	bare := filepath.Join(t.TempDir(), "source.git")
 	if out, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
@@ -98,8 +98,8 @@ func TestValidateRejectsBareGitSource(t *testing.T) {
 	}
 	v := task(root)
 	v.Repositories[0].Source = bare
-	if Validate(&v) == nil {
-		t.Fatal("expected bare Git source rejection")
+	if err := Validate(&v); err != nil {
+		t.Fatalf("structural validation unexpectedly inspected Git: %v", err)
 	}
 }
 func TestValidateRejectsInvalidCheckAndChange(t *testing.T) {

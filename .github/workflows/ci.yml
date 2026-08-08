@@ -66,6 +66,7 @@ jobs:
           go run ./internal/tools/coveragecheck -profile coverage.out -min 80
 
   snapshot:
+    needs: [test, race, coverage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

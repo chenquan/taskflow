@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/chenquan/specflow/internal/execx"
@@ -35,7 +37,51 @@ type Validation struct {
 	Issues []string
 }
 
+type Version struct {
+	Major int
+	Minor int
+	Patch int
+}
+
+func (v Version) String() string { return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch) }
+
+var versionPattern = regexp.MustCompile(`(?:^|[^0-9])v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:$|[^0-9.])`)
+
+func ParseVersion(output string) (Version, error) {
+	match := versionPattern.FindStringSubmatch(strings.TrimSpace(output))
+	if len(match) != 4 {
+		return Version{}, CompatibilityError{Message: fmt.Sprintf("parse OpenSpec version %q", strings.TrimSpace(output))}
+	}
+	values := [3]int{}
+	for index := range values {
+		value, err := strconv.Atoi(match[index+1])
+		if err != nil {
+			return Version{}, CompatibilityError{Message: fmt.Sprintf("parse OpenSpec version %q", strings.TrimSpace(output))}
+		}
+		values[index] = value
+	}
+	version := Version{Major: values[0], Minor: values[1], Patch: values[2]}
+	if version.Major != 1 || version.Minor < 4 || (version.Minor == 4 && version.Patch < 1) {
+		return Version{}, CompatibilityError{Message: fmt.Sprintf("unsupported OpenSpec version %s; requires >=1.4.1, <2.0.0", version)}
+	}
+	return version, nil
+}
+
 func (c Client) Available() bool { _, err := c.Runner.LookPath("openspec"); return err == nil }
+func (c Client) Probe(ctx context.Context) (Version, error) {
+	if _, err := c.Runner.LookPath("openspec"); err != nil {
+		return Version{}, CompatibilityError{Message: "openspec is not executable"}
+	}
+	r, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "openspec", Args: []string{"--version"}})
+	if err != nil {
+		message := strings.TrimSpace(r.Stderr)
+		if message == "" {
+			message = err.Error()
+		}
+		return Version{}, CompatibilityError{Message: "probe OpenSpec version: " + message}
+	}
+	return ParseVersion(r.Stdout)
+}
 func (c Client) ChangeExists(worktree, change string) bool {
 	_, err := os.Stat(filepath.Join(worktree, "openspec", "changes", change))
 	return err == nil

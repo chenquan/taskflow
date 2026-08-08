@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -160,6 +161,19 @@ func (s Service) Load(tasksRoot, taskID string) (domain.Task, error) {
 	}
 	return config.Load(config.Path(tasksRoot, taskID))
 }
+func (s Service) ConfigValidate(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
+	r := report.New("config validate", t.Task.ID)
+	for _, repository := range t.Repositories {
+		if _, err := s.Git.Inspect(ctx, repository.Source); err != nil {
+			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Repo: repository.Name, Message: "source is not a Git worktree: " + err.Error()})
+		}
+	}
+	r.Data = t
+	if len(r.Errors) > 0 {
+		return r, report.ExitConfig
+	}
+	return r, report.ExitOK
+}
 func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report.Result, report.ExitCode) {
 	res := report.New("doctor", t.Task.ID)
 	versions := map[string]string{}
@@ -176,9 +190,6 @@ func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report
 		}
 	}
 	requiredTools := []string{"git"}
-	if t.Execution.CreateOpenSpecChange {
-		requiredTools = append(requiredTools, "openspec")
-	}
 	for _, tool := range requiredTools {
 		if _, err := s.Runner.LookPath(tool); err != nil {
 			res.Fail(report.Diagnostic{Code: "TOOL_NOT_FOUND", Message: tool + " is not executable"})
@@ -190,6 +201,16 @@ func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report
 			res.Fail(report.Diagnostic{Code: "TOOL_VERSION_UNAVAILABLE", Message: tool + " version/capability probe failed"})
 		} else {
 			versions[tool] = strings.TrimSpace(version.Stdout)
+		}
+	}
+	openSpecIncompatible := false
+	if t.Execution.CreateOpenSpecChange {
+		version, err := s.OpenSpec.Probe(ctx)
+		if err != nil {
+			openSpecIncompatible = true
+			res.Fail(report.Diagnostic{Code: "OPENSPEC_INCOMPATIBLE", Message: err.Error()})
+		} else {
+			versions["openspec"] = version.String()
 		}
 	}
 	for _, tool := range t.Development.EnabledTools {
@@ -260,6 +281,9 @@ func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report
 		}
 	}
 	res.Data = map[string]any{"versions": versions}
+	if openSpecIncompatible {
+		return res, report.ExitToolCompatibility
+	}
 	if len(res.Errors) > 0 {
 		return res, report.ExitEnvironment
 	}
@@ -289,6 +313,16 @@ func (s Service) Start(ctx context.Context, t domain.Task, o StartOptions) (repo
 	}
 	defer l.Release()
 	ordered, _ := plan.Order(t.Repositories)
+	if diagnostic, code := s.probeOpenSpec(ctx, t); diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
+	}
+	sourceLocks, diagnostic, code := s.acquireSourceLocks(ctx, ordered)
+	if diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
+	}
+	defer releaseSourceLocks(sourceLocks)
 	if diagnostic, code := s.preflightStart(ctx, t, ordered); diagnostic != nil {
 		res.Fail(*diagnostic)
 		return res, code
@@ -381,9 +415,6 @@ func (s Service) Start(ctx context.Context, t domain.Task, o StartOptions) (repo
 }
 
 func (s Service) preflightStart(ctx context.Context, task domain.Task, ordered []domain.Repository) (*report.Diagnostic, report.ExitCode) {
-	if task.Execution.CreateOpenSpecChange && !s.OpenSpec.Available() {
-		return &report.Diagnostic{Code: "OPENSPEC_NOT_AVAILABLE", Message: "openspec is not executable"}, report.ExitToolCompatibility
-	}
 	for _, repository := range ordered {
 		sourceInfo, err := s.Git.Inspect(ctx, repository.Source)
 		if err != nil {
@@ -441,6 +472,70 @@ func (s Service) preflightStart(ctx context.Context, task domain.Task, ordered [
 		}
 	}
 	return nil, report.ExitOK
+}
+
+func (s Service) probeOpenSpec(ctx context.Context, task domain.Task) (*report.Diagnostic, report.ExitCode) {
+	if !task.Execution.CreateOpenSpecChange {
+		return nil, report.ExitOK
+	}
+	if _, err := s.OpenSpec.Probe(ctx); err != nil {
+		return &report.Diagnostic{Code: "OPENSPEC_INCOMPATIBLE", Message: err.Error()}, report.ExitToolCompatibility
+	}
+	return nil, report.ExitOK
+}
+
+type sourceLockCandidate struct {
+	CommonDir string
+	Branch    string
+	Repo      string
+}
+
+func (s Service) acquireSourceLocks(ctx context.Context, repositories []domain.Repository) ([]*lock.Lock, *report.Diagnostic, report.ExitCode) {
+	byKey := map[string]sourceLockCandidate{}
+	for _, repository := range repositories {
+		info, err := s.Git.Inspect(ctx, repository.Source)
+		if err != nil {
+			return nil, &report.Diagnostic{Code: "SOURCE_LOCK_UNAVAILABLE", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
+		}
+		if info.CommonDir == "" {
+			return nil, &report.Diagnostic{Code: "SOURCE_LOCK_UNAVAILABLE", Repo: repository.Name, Message: "Git common directory is unavailable"}, report.ExitEnvironment
+		}
+		candidate := sourceLockCandidate{CommonDir: info.CommonDir, Branch: repository.Branch, Repo: repository.Name}
+		key := candidate.CommonDir + "\x00" + candidate.Branch
+		if _, exists := byKey[key]; !exists {
+			byKey[key] = candidate
+		}
+	}
+	candidates := make([]sourceLockCandidate, 0, len(byKey))
+	for _, candidate := range byKey {
+		candidates = append(candidates, candidate)
+	}
+	sort.Slice(candidates, func(left, right int) bool {
+		if candidates[left].CommonDir == candidates[right].CommonDir {
+			return candidates[left].Branch < candidates[right].Branch
+		}
+		return candidates[left].CommonDir < candidates[right].CommonDir
+	})
+	locks := make([]*lock.Lock, 0, len(candidates))
+	for _, candidate := range candidates {
+		holder, err := lock.AcquireSource(candidate.CommonDir, candidate.Branch)
+		if err != nil {
+			releaseSourceLocks(locks)
+			var conflict lock.ErrConflict
+			if errors.As(err, &conflict) {
+				return nil, &report.Diagnostic{Code: "SOURCE_BRANCH_LOCKED", Repo: candidate.Repo, Message: fmt.Sprintf("source branch %s is locked", candidate.Branch)}, report.ExitConflict
+			}
+			return nil, &report.Diagnostic{Code: "SOURCE_LOCK_UNAVAILABLE", Repo: candidate.Repo, Message: err.Error()}, report.ExitEnvironment
+		}
+		locks = append(locks, holder)
+	}
+	return locks, nil, report.ExitOK
+}
+
+func releaseSourceLocks(locks []*lock.Lock) {
+	for index := len(locks) - 1; index >= 0; index-- {
+		_ = locks[index].Release()
+	}
 }
 
 func pendingOutcome(now time.Time) domain.ActionOutcome {

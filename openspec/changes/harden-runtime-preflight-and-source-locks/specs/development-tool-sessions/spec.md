@@ -1,8 +1,4 @@
-## Purpose
-
-Define safe configured development-tool launches and exclusive task sessions.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Build safe Codex and Claude launch specifications
 The CLI SHALL support enabled `open <task-id> --tool codex|claude` tools, use the configured executable and the primary worktree as cwd, add every secondary worktree and task root as additional directories, and MUST NOT include permission-bypass flags or Claude `--worktree`. A requested disabled or undefined tool MUST fail before acquiring a session lease. The launched child environment MUST contain at most one effective value for each environment key, with configured adapter values overriding inherited values and Windows key comparison treated case-insensitively.
@@ -14,10 +10,3 @@ The CLI SHALL support enabled `open <task-id> --tool codex|claude` tools, use th
 #### Scenario: Enable Claude additional instructions
 - **WHEN** Claude configuration enables additional instructions and the inherited environment already defines that key
 - **THEN** the launched child receives exactly one `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` value
-
-### Requirement: Serialize active write sessions
-The CLI MUST hold a session lease for the entire child process and reject another `open` for the same task while the recorded PID is live.
-
-#### Scenario: Concurrent tool open
-- **WHEN** Codex is active and a user starts Claude for the same task
-- **THEN** the second command returns a session conflict without starting Claude

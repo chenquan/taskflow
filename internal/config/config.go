@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -115,10 +114,6 @@ func Validate(t *domain.Task) error {
 		info, err := os.Stat(source)
 		if err != nil || !info.IsDir() {
 			return fmt.Errorf("repository %s source is not a directory", r.Name)
-		}
-		output, err := exec.Command("git", "-C", source, "rev-parse", "--is-inside-work-tree").Output()
-		if err != nil || strings.TrimSpace(string(output)) != "true" {
-			return fmt.Errorf("repository %s source is not a Git worktree", r.Name)
 		}
 		r.Source = source
 		if r.Worktree == "" {

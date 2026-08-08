@@ -123,19 +123,26 @@ func NewRootCommand() *cobra.Command {
 	finish.Flags().BoolVar(&finishDryRun, "dry-run", false, "generate a non-mutating readiness report")
 	root.AddCommand(finish)
 	configCmd := &cobra.Command{Use: "config"}
-	for _, name := range []string{"show", "validate"} {
-		n := name
-		configCmd.AddCommand(&cobra.Command{Use: n + " <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
-			t, err := svc.Load(tasksRoot, args[0])
-			r := report.New("config "+n, args[0])
-			if err != nil {
-				r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
-				return render(c, r, report.ExitConfig)
-			}
-			r.Data = t
-			return render(c, r, report.ExitOK)
-		}})
-	}
+	configCmd.AddCommand(&cobra.Command{Use: "show <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		t, err := svc.Load(tasksRoot, args[0])
+		r := report.New("config show", args[0])
+		if err != nil {
+			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
+			return render(c, r, report.ExitConfig)
+		}
+		r.Data = t
+		return render(c, r, report.ExitOK)
+	}})
+	configCmd.AddCommand(&cobra.Command{Use: "validate <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		t, err := svc.Load(tasksRoot, args[0])
+		if err != nil {
+			r := report.New("config validate", args[0])
+			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
+			return render(c, r, report.ExitConfig)
+		}
+		r, code := svc.ConfigValidate(context.Background(), t)
+		return render(c, r, code)
+	}})
 	root.AddCommand(configCmd)
 	var repo string
 	doctor := &cobra.Command{Use: "doctor <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {

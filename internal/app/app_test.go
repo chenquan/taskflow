@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/chenquan/specflow/internal/domain"
@@ -116,6 +117,22 @@ func TestInitRejectsTraversalTaskID(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(root), "outside")); !os.IsNotExist(err) {
 		t.Fatalf("traversal wrote outside root: %v", err)
+	}
+}
+
+func TestConfigValidateRejectsNonGitSources(t *testing.T) {
+	root := t.TempDir()
+	for _, source := range []string{t.TempDir(), filepath.Join(t.TempDir(), "bare.git")} {
+		if strings.HasSuffix(source, ".git") {
+			if out, err := exec.Command("git", "init", "--bare", source).CombinedOutput(); err != nil {
+				t.Fatalf("git init --bare: %v: %s", err, out)
+			}
+		}
+		task := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: "TASK", Root: root}, Primary: "repo", Repositories: []domain.Repository{{Name: "repo", Source: source, Worktree: filepath.Join("worktrees", "repo")}}, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}}}, Execution: domain.Execution{CreateOpenSpecChange: true}}
+		result, code := New().ConfigValidate(context.Background(), task)
+		if code != report.ExitConfig || !hasDiagnostic(result.Errors, "INVALID_CONFIGURATION") {
+			t.Fatalf("source=%s code=%d result=%#v", source, code, result)
+		}
 	}
 }
 func TestInitRejectsUnknownPrimaryWithoutCreatingTaskDirectory(t *testing.T) {

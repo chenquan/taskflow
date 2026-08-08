@@ -30,13 +30,10 @@ func (c Client) Inspect(ctx context.Context, path string) (Info, error) {
 	if err == nil {
 		info.CommonDir = resolveGitPath(info.Root, strings.TrimSpace(common.Stdout))
 	}
-	s, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "status", "--porcelain"}})
+	s, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "status", "--porcelain=v1", "-z"}})
 	if err == nil {
-		trimmed := strings.TrimSpace(s.Stdout)
-		info.Dirty = trimmed != ""
-		if trimmed != "" {
-			info.DirtyFiles = len(strings.Split(trimmed, "\n"))
-		}
+		info.Dirty = s.Stdout != ""
+		info.DirtyFiles = dirtyRecordCount(s.Stdout)
 	}
 	remote, _ := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "remote", "get-url", "origin"}})
 	info.Remote = strings.TrimSpace(remote.Stdout)
@@ -59,6 +56,22 @@ func (c Client) Inspect(ctx context.Context, path string) (Info, error) {
 		}
 	}
 	return info, nil
+}
+
+func dirtyRecordCount(output string) int {
+	records := strings.Split(output, "\x00")
+	count := 0
+	for index := 0; index < len(records); index++ {
+		record := records[index]
+		if len(record) < 3 {
+			continue
+		}
+		count++
+		if record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C' {
+			index++
+		}
+	}
+	return count
 }
 
 func resolveGitPath(root, value string) string {

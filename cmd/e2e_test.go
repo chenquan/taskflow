@@ -96,6 +96,7 @@ func newE2EFixture(t *testing.T) e2eFixture {
 	t.Setenv("SPECFLOW_E2E_OPENSPEC_BLOCK", openspecBlock)
 	t.Setenv("SPECFLOW_E2E_OPENSPEC_READY", openspecReady)
 	t.Setenv("SPECFLOW_E2E_OPENSPEC_RELEASE", openspecRelease)
+	t.Setenv("SPECFLOW_E2E_OPENSPEC_VERSION", "")
 	t.Setenv("SPECFLOW_E2E_TOOL_LOG", toolLog)
 	t.Setenv("SPECFLOW_E2E_TOOL_BLOCK", toolBlock)
 	t.Setenv("SPECFLOW_E2E_TOOL_READY", toolReady)

@@ -1,15 +1,4 @@
-## Purpose
-
-Define the strict task configuration contract and normalization rules.
-
-## Requirements
-
-### Requirement: Load a strict versioned task configuration
-The CLI MUST decode `specflow.yaml` with unknown fields rejected and MUST reject unsupported configuration versions. It MUST normalize source paths to absolute paths and preserve task identity separately from derived branch or change names.
-
-#### Scenario: Reject an unknown YAML field
-- **WHEN** a task configuration contains an unrecognized field
-- **THEN** `specflow config validate` returns a configuration error identifying that field
+## MODIFIED Requirements
 
 ### Requirement: Validate repository and dependency constraints
 The CLI MUST require unique repository names matching the supported name pattern, an existing source directory, a primary repository present in the repository set, worktree paths contained beneath the task's `worktrees` directory, and an acyclic `depends_on` graph whose references resolve to declared repositories. Loading and structural validation MUST NOT launch external commands. `specflow config validate` MUST additionally inspect every configured source through the Git adapter and reject a source that is not an existing Git worktree.
@@ -25,10 +14,3 @@ The CLI MUST require unique repository names matching the supported name pattern
 #### Scenario: Reject a non-Git source through config validate
 - **WHEN** a structurally valid configuration references an existing non-Git source directory
 - **THEN** `specflow config validate` rejects the source without changing the task workspace
-
-### Requirement: Display normalized configuration
-The CLI SHALL provide `specflow config show <task-id>` and `specflow config validate <task-id>` using the same validated configuration model. The show command MUST not mutate the task workspace or source repositories.
-
-#### Scenario: Show a valid configuration as JSON
-- **WHEN** a user requests `config show` with JSON output for a valid task
-- **THEN** the response includes the normalized configuration in the stable result envelope

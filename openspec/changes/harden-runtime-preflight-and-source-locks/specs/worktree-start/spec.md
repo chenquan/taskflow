@@ -1,15 +1,4 @@
-## Purpose
-
-Define complete dry-run planning and safe, idempotent managed worktree creation.
-
-## Requirements
-
-### Requirement: Plan a complete start operation
-The CLI SHALL provide `specflow start <task-id> --dry-run` and list directory, fetch (when configured), worktree, and OpenSpec change actions in dependency order before execution. Dry-run MUST not modify files, Git state, or OpenSpec state.
-
-#### Scenario: Dry-run three repositories
-- **WHEN** a valid task has three repositories and the user requests dry-run
-- **THEN** the result lists all planned worktree and change actions in deterministic dependency order and leaves the sources and task state unchanged
+## MODIFIED Requirements
 
 ### Requirement: Create safe managed worktrees
 Execute mode MUST acquire the task lock, verify compatible OpenSpec when change creation is enabled, acquire all required source-branch locks, and complete a read-only preflight for every repository before writing state or invoking a mutating command. Preflight MUST verify source identity, base and remote availability, branch occupancy, and target identity. Execute mode MUST create each configured worktree using argument-array Git invocation with the configured branch and base, reject an existing target or branch that does not match the configured repository, and never delete or overwrite it.
@@ -25,10 +14,3 @@ Execute mode MUST acquire the task lock, verify compatible OpenSpec when change 
 #### Scenario: Reject incompatible OpenSpec before mutation
 - **WHEN** OpenSpec change creation is enabled and OpenSpec is unavailable or outside the supported version range
 - **THEN** execute mode returns exit code 6 before writing task state, fetching, or creating a worktree
-
-### Requirement: Start is idempotent
-An existing worktree is complete only when its canonical source/common Git directory and configured branch match. A matching worktree MUST be reused without another `git worktree add` invocation.
-
-#### Scenario: Repeat start
-- **WHEN** start is run again after successful worktree creation
-- **THEN** it reports the worktree action as already complete and makes no duplicate branch or directory

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -76,5 +77,16 @@ func TestRunReportsExitCodeAndTimeout(t *testing.T) {
 	timeoutResult, err := (OSRunner{}).Run(context.Background(), timeoutSpec)
 	if err == nil || !timeoutResult.TimedOut {
 		t.Fatalf("err=%v result=%#v", err, timeoutResult)
+	}
+}
+
+func TestMergeEnvironmentOverridesDuplicateKeys(t *testing.T) {
+	merged := mergeEnvironment([]string{"A=old", "B=base", "A=older"}, []string{"A=new", "C=overlay"}, false)
+	if !reflect.DeepEqual(merged, []string{"B=base", "A=new", "C=overlay"}) {
+		t.Fatalf("merged=%v", merged)
+	}
+	windows := mergeEnvironment([]string{"Path=base", "A=base"}, []string{"PATH=overlay"}, true)
+	if !reflect.DeepEqual(windows, []string{"A=base", "PATH=overlay"}) {
+		t.Fatalf("windows=%v", windows)
 	}
 }

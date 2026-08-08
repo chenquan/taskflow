@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -41,7 +43,7 @@ func (OSRunner) Run(ctx context.Context, s CommandSpec) (Result, error) {
 	c.Dir = s.Dir
 	c.Stdin, c.Stdout, c.Stderr = s.Stdin, s.Stdout, s.Stderr
 	if len(s.Env) > 0 {
-		c.Env = append(os.Environ(), s.Env...)
+		c.Env = mergeEnvironment(os.Environ(), s.Env, runtime.GOOS == "windows")
 	}
 	if s.Stdin != nil || s.Stdout != nil || s.Stderr != nil {
 		err := c.Run()
@@ -58,4 +60,26 @@ func (OSRunner) Run(ctx context.Context, s CommandSpec) (Result, error) {
 		r.ExitCode = ee.ExitCode()
 	}
 	return r, err
+}
+
+func mergeEnvironment(base, overlay []string, caseInsensitive bool) []string {
+	result := append([]string(nil), base...)
+	keyOf := func(value string) string {
+		key, _, _ := strings.Cut(value, "=")
+		if caseInsensitive {
+			return strings.ToUpper(key)
+		}
+		return key
+	}
+	for _, value := range overlay {
+		key := keyOf(value)
+		filtered := result[:0]
+		for _, existing := range result {
+			if keyOf(existing) != key {
+				filtered = append(filtered, existing)
+			}
+		}
+		result = append(filtered, value)
+	}
+	return result
 }

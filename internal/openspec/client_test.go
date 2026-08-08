@@ -80,3 +80,25 @@ func TestClientRejectsMismatchedRequestedChange(t *testing.T) {
 		t.Fatal("compatibility error lost message")
 	}
 }
+
+func TestParseVersionRequiresSupportedOpenSpec(t *testing.T) {
+	cases := []struct {
+		output string
+		ok     bool
+	}{
+		{output: "OpenSpec 1.4.1", ok: true},
+		{output: "v1.9.0", ok: true},
+		{output: "1.4.0", ok: false},
+		{output: "2.0.0", ok: false},
+		{output: "1.4.1.2", ok: false},
+		{output: "unknown", ok: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.output, func(t *testing.T) {
+			_, err := ParseVersion(tc.output)
+			if (err == nil) != tc.ok {
+				t.Fatalf("output=%q err=%v", tc.output, err)
+			}
+		})
+	}
+}

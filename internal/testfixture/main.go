@@ -29,6 +29,10 @@ func main() {
 
 func runOpenSpec(args []string) int {
 	if equalArgs(args, "--version") {
+		if version := os.Getenv("SPECFLOW_E2E_OPENSPEC_VERSION"); version != "" {
+			fmt.Println(version)
+			return 0
+		}
 		fmt.Println("OpenSpec 1.4.1")
 		return 0
 	}

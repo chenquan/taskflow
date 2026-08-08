@@ -235,6 +235,61 @@ func TestE2EPreflightScansAllRepositoriesBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestE2EIncompatibleOpenSpecVersionBlocksDoctorAndStart(t *testing.T) {
+	f := newE2EFixture(t)
+	if out, _, err := runCobraE2E(t, f.tasks, "init", "unsupported-openspec", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+		t.Fatalf("init: %v: %s", err, out)
+	}
+	t.Setenv("SPECFLOW_E2E_OPENSPEC_VERSION", "OpenSpec 2.0.0")
+	for _, command := range [][]string{{"doctor", "unsupported-openspec"}, {"start", "unsupported-openspec", "--execute"}} {
+		stateBefore, _ := readState(t, f.tasks, "unsupported-openspec")
+		out, _, err := runCobraE2E(t, f.tasks, append([]string{"--json"}, command...)...)
+		result := decodeResult(t, out)
+		if exitCode(err) != int(report.ExitToolCompatibility) || !containsE2ECode(result, "OPENSPEC_INCOMPATIBLE") {
+			t.Fatalf("%v: code=%d result=%#v", command, exitCode(err), result)
+		}
+		stateAfter, _ := readState(t, f.tasks, "unsupported-openspec")
+		if !bytes.Equal(stateBefore, stateAfter) {
+			t.Fatalf("%v changed state before rejecting incompatible OpenSpec", command)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.tasks, "unsupported-openspec", "worktrees", "repo")); !os.IsNotExist(err) {
+		t.Fatalf("incompatible OpenSpec created a worktree: %v", err)
+	}
+}
+
+func TestE2ESourceBranchLockPreventsCrossTaskMutation(t *testing.T) {
+	f := newE2EFixture(t)
+	binary := buildE2EBinary(t)
+	args := func(parts ...string) []string { return append([]string{"--tasks-root", f.tasks}, parts...) }
+	for _, taskID := range []string{"source-a", "source-b"} {
+		if out, stderr, code := runBinaryE2E(t, binary, args("init", taskID, "--primary", "repo", "--repo", "repo="+f.repo)...); code != 0 || stderr != "" {
+			t.Fatalf("init %s: code=%d stderr=%s output=%s", taskID, code, stderr, out)
+		}
+	}
+	mutateE2ETask(t, f.tasks, "source-b", func(task *domain.Task) {
+		task.Repositories[0].Branch = "feature/source-a"
+	})
+	stateBefore, _ := readState(t, f.tasks, "source-b")
+	touchFile(t, f.openspecBlock)
+	t.Cleanup(func() { _ = os.WriteFile(f.openspecRelease, nil, 0644) })
+	first := startBinaryE2E(t, binary, args("start", "source-a", "--execute")...)
+	waitForFile(t, f.openspecReady)
+	out, _, err := runCobraE2E(t, f.tasks, "--json", "start", "source-b", "--execute")
+	result := decodeResult(t, out)
+	if exitCode(err) != int(report.ExitConflict) || !containsE2ECode(result, "SOURCE_BRANCH_LOCKED") {
+		t.Fatalf("code=%d result=%#v", exitCode(err), result)
+	}
+	stateAfter, _ := readState(t, f.tasks, "source-b")
+	if !bytes.Equal(stateBefore, stateAfter) {
+		t.Fatal("source lock conflict changed competing task state")
+	}
+	touchFile(t, f.openspecRelease)
+	if out, stderr, code := first.wait(t); code != 0 || stderr != "" || !strings.Contains(out, "started") {
+		t.Fatalf("first start: code=%d stderr=%s output=%s", code, stderr, out)
+	}
+}
+
 func TestE2ECompiledBinaryThreeRepositoryLifecycle(t *testing.T) {
 	f := newE2EFixture(t)
 	binary := buildE2EBinary(t)
