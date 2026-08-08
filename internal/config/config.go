@@ -32,6 +32,9 @@ func Load(path string) (domain.Task, error) {
 	if err != nil {
 		return domain.Task{}, err
 	}
+	if err = requireChangeCreationIntent(b); err != nil {
+		return domain.Task{}, fmt.Errorf("decode %s: %w", path, err)
+	}
 	var t domain.Task
 	d := yaml.NewDecoder(bytes.NewReader(b))
 	d.KnownFields(true)
@@ -44,6 +47,31 @@ func Load(path string) (domain.Task, error) {
 	return t, nil
 }
 func Marshal(t domain.Task) ([]byte, error) { return yaml.Marshal(t) }
+
+func requireChangeCreationIntent(raw []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	if len(doc.Content) == 0 || len(doc.Content[0].Content)%2 != 0 {
+		return fmt.Errorf("configuration must be a mapping")
+	}
+	root := doc.Content[0]
+	for i := 0; i < len(root.Content); i += 2 {
+		if root.Content[i].Value != "execution" {
+			continue
+		}
+		execution := root.Content[i+1]
+		for j := 0; j+1 < len(execution.Content); j += 2 {
+			if execution.Content[j].Value == "create_openspec_change" {
+				return nil
+			}
+		}
+		return fmt.Errorf("execution.create_openspec_change is required")
+	}
+	return fmt.Errorf("execution.create_openspec_change is required")
+}
+
 func Validate(t *domain.Task) error {
 	if t.Version != domain.ConfigVersion {
 		return fmt.Errorf("unsupported config version %d", t.Version)
@@ -138,6 +166,9 @@ func Validate(t *domain.Task) error {
 	if !primary {
 		return fmt.Errorf("primary repository %q is not configured", t.Primary)
 	}
+	if err := validateDevelopment(t.Development); err != nil {
+		return err
+	}
 	for _, r := range t.Repositories {
 		for _, dep := range r.DependsOn {
 			if !seen[dep] {
@@ -147,6 +178,36 @@ func Validate(t *domain.Task) error {
 	}
 	if err := checkAcyclic(t.Repositories); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateDevelopment(development domain.Development) error {
+	if development.DefaultTool == "" {
+		return fmt.Errorf("development.default_tool is required")
+	}
+	enabled := map[string]bool{}
+	for _, name := range development.EnabledTools {
+		if enabled[name] {
+			return fmt.Errorf("duplicate enabled development tool %q", name)
+		}
+		enabled[name] = true
+		if name != "codex" && name != "claude" {
+			return fmt.Errorf("unsupported development tool %q", name)
+		}
+		def, ok := development.Tools[name]
+		if !ok {
+			return fmt.Errorf("enabled development tool %q has no definition", name)
+		}
+		if strings.TrimSpace(def.Executable) == "" {
+			return fmt.Errorf("development tool %q executable is required", name)
+		}
+		if def.LaunchMode != "direct" {
+			return fmt.Errorf("development tool %q has unsupported launch mode %q", name, def.LaunchMode)
+		}
+	}
+	if !enabled[development.DefaultTool] {
+		return fmt.Errorf("development.default_tool %q is not enabled", development.DefaultTool)
 	}
 	return nil
 }

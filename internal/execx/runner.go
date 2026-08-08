@@ -22,6 +22,7 @@ type Result struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+	TimedOut bool
 }
 type Runner interface {
 	Run(context.Context, CommandSpec) (Result, error)
@@ -44,14 +45,14 @@ func (OSRunner) Run(ctx context.Context, s CommandSpec) (Result, error) {
 	}
 	if s.Stdin != nil || s.Stdout != nil || s.Stderr != nil {
 		err := c.Run()
-		r := Result{}
+		r := Result{TimedOut: ctx.Err() == context.DeadlineExceeded}
 		if ee, ok := err.(*exec.ExitError); ok {
 			r.ExitCode = ee.ExitCode()
 		}
 		return r, err
 	}
 	out, err := c.Output()
-	r := Result{Stdout: string(out)}
+	r := Result{Stdout: string(out), TimedOut: ctx.Err() == context.DeadlineExceeded}
 	if ee, ok := err.(*exec.ExitError); ok {
 		r.Stderr = string(ee.Stderr)
 		r.ExitCode = ee.ExitCode()

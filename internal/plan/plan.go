@@ -7,7 +7,12 @@ import (
 	"github.com/chenquan/specflow/internal/domain"
 )
 
-type Item struct{ ID, Repo, Kind, Description string }
+type Item struct {
+	ID          string `json:"id"`
+	Repo        string `json:"repo,omitempty"`
+	Kind        string `json:"kind"`
+	Description string `json:"description"`
+}
 
 func Order(repos []domain.Repository) ([]domain.Repository, error) {
 	by := map[string]domain.Repository{}
@@ -56,12 +61,48 @@ func Build(task domain.Task) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	items := []Item{}
+	items := []Item{{ID: "directory-worktrees", Kind: "directory", Description: "ENSURE TASK WORKTREES DIRECTORY"}}
 	for _, r := range ordered {
 		if task.Execution.Fetch {
 			items = append(items, Item{ID: "fetch-" + r.Name, Repo: r.Name, Kind: "fetch", Description: fmt.Sprintf("FETCH %s", r.Name)})
 		}
-		items = append(items, Item{ID: "worktree-" + r.Name, Repo: r.Name, Kind: "worktree", Description: fmt.Sprintf("ADD WORKTREE %s -> %s", r.Name, r.Worktree)}, Item{ID: "openspec-" + r.Name, Repo: r.Name, Kind: "openspec", Description: fmt.Sprintf("CREATE CHANGE %s in %s", r.Change, r.Worktree)})
+		items = append(items, Item{ID: "worktree-" + r.Name, Repo: r.Name, Kind: "worktree", Description: fmt.Sprintf("ADD WORKTREE %s -> %s", r.Name, r.Worktree)})
+		if task.Execution.CreateOpenSpecChange {
+			items = append(items, Item{ID: "openspec-" + r.Name, Repo: r.Name, Kind: "openspec", Description: fmt.Sprintf("CREATE CHANGE %s in %s", r.Change, r.Worktree)})
+		}
 	}
 	return items, nil
+}
+
+func DependencyClosure(repos []domain.Repository, name string) ([]domain.Repository, error) {
+	ordered, err := Order(repos)
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]domain.Repository{}
+	for _, repo := range repos {
+		byName[repo.Name] = repo
+	}
+	if _, ok := byName[name]; !ok {
+		return nil, fmt.Errorf("unknown repository %s", name)
+	}
+	selected := map[string]bool{}
+	var visit func(string)
+	visit = func(current string) {
+		if selected[current] {
+			return
+		}
+		selected[current] = true
+		for _, dependency := range byName[current].DependsOn {
+			visit(dependency)
+		}
+	}
+	visit(name)
+	result := make([]domain.Repository, 0, len(selected))
+	for _, repo := range ordered {
+		if selected[repo.Name] {
+			result = append(result, repo)
+		}
+	}
+	return result, nil
 }

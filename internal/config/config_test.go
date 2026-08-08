@@ -2,13 +2,61 @@ package config
 
 import (
 	"github.com/chenquan/specflow/internal/domain"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func task(root string) domain.Task {
-	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}}
+	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}}}, Execution: domain.Execution{CreateOpenSpecChange: true}}
+}
+
+func TestLoadRequiresExplicitSupportedExecutionPolicy(t *testing.T) {
+	d := t.TempDir()
+	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	v := task(d)
+	raw, err := Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "specflow.yaml")
+	missing := strings.Replace(string(raw), "    create_openspec_change: true\n", "", 1)
+	if err := os.WriteFile(path, []byte(missing), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "create_openspec_change is required") {
+		t.Fatalf("expected required execution intent, got %v", err)
+	}
+	stale := strings.Replace(string(raw), "    create_openspec_change: true\n", "    create_openspec_change: true\n    cleanup: false\n", 1)
+	if err := os.WriteFile(path, []byte(stale), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "cleanup") {
+		t.Fatalf("expected removed field rejection, got %v", err)
+	}
+}
+
+func TestValidateDevelopmentPolicy(t *testing.T) {
+	d := t.TempDir()
+	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	v := task(d)
+	v.Development.DefaultTool = "claude"
+	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "not enabled") {
+		t.Fatalf("expected disabled default rejection, got %v", err)
+	}
+	v = task(d)
+	definition := v.Development.Tools["codex"]
+	definition.LaunchMode = "shell"
+	v.Development.Tools["codex"] = definition
+	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "launch mode") {
+		t.Fatalf("expected launch mode rejection, got %v", err)
+	}
 }
 func TestValidateDefaults(t *testing.T) {
 	d := t.TempDir()

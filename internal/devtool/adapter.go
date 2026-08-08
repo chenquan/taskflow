@@ -2,10 +2,10 @@ package devtool
 
 import (
 	"fmt"
-	"github.com/chenquan/specflow/internal/domain"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/chenquan/specflow/internal/domain"
 )
 
 type LaunchSpec struct {
@@ -21,6 +21,16 @@ func (a AdapterImpl) Build(t domain.Task) (LaunchSpec, error) {
 	if a.Tool != "codex" && a.Tool != "claude" {
 		return LaunchSpec{}, fmt.Errorf("unsupported tool %s", a.Tool)
 	}
+	if !enabled(t.Development.EnabledTools, a.Tool) {
+		return LaunchSpec{}, fmt.Errorf("tool %s is not enabled", a.Tool)
+	}
+	definition, ok := t.Development.Tools[a.Tool]
+	if !ok || strings.TrimSpace(definition.Executable) == "" {
+		return LaunchSpec{}, fmt.Errorf("tool %s has no configured executable", a.Tool)
+	}
+	if definition.LaunchMode != "direct" {
+		return LaunchSpec{}, fmt.Errorf("tool %s has unsupported launch mode %s", a.Tool, definition.LaunchMode)
+	}
 	var primary string
 	for _, r := range t.Repositories {
 		if r.Name == t.Primary {
@@ -30,7 +40,7 @@ func (a AdapterImpl) Build(t domain.Task) (LaunchSpec, error) {
 	if primary == "" {
 		return LaunchSpec{}, fmt.Errorf("primary repository is not configured")
 	}
-	spec := LaunchSpec{Executable: a.Tool, Dir: primary}
+	spec := LaunchSpec{Executable: definition.Executable, Dir: primary}
 	for _, r := range t.Repositories {
 		p := filepath.Join(t.Task.Root, r.Worktree)
 		if p != primary {
@@ -38,7 +48,7 @@ func (a AdapterImpl) Build(t domain.Task) (LaunchSpec, error) {
 		}
 	}
 	spec.Args = append(spec.Args, "--add-dir", t.Task.Root)
-	if a.Tool == "claude" && t.Development.Tools["claude"].LoadAdditionalInstructions {
+	if a.Tool == "claude" && definition.LoadAdditionalInstructions {
 		spec.Env = []string{"CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"}
 	}
 	for _, arg := range spec.Args {
@@ -48,8 +58,15 @@ func (a AdapterImpl) Build(t domain.Task) (LaunchSpec, error) {
 	}
 	return spec, nil
 }
+
+func enabled(enabledTools []string, tool string) bool {
+	for _, enabledTool := range enabledTools {
+		if enabledTool == tool {
+			return true
+		}
+	}
+	return false
+}
 func ApplyEnv(base []string, overlay []string) []string {
 	return append(append([]string{}, base...), overlay...)
 }
-
-var _ = os.Environ

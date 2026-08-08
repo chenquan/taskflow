@@ -13,8 +13,23 @@ func TestOrderDeterministic(t *testing.T) {
 	}
 }
 func TestBuildIncludesConfiguredFetch(t *testing.T) {
-	items, e := Build(domain.Task{Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a", Change: "a"}}, Execution: domain.Execution{Fetch: true}})
-	if e != nil || len(items) != 3 || items[0].Kind != "fetch" {
+	items, e := Build(domain.Task{Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a", Change: "a"}}, Execution: domain.Execution{Fetch: true, CreateOpenSpecChange: true}})
+	if e != nil || len(items) != 4 || items[0].Kind != "directory" || items[1].Kind != "fetch" || items[3].Kind != "openspec" {
 		t.Fatalf("%v %#v", e, items)
+	}
+}
+
+func TestBuildSkipsOpenSpecWhenDisabled(t *testing.T) {
+	items, err := Build(domain.Task{Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a", Change: "a"}}})
+	if err != nil || len(items) != 2 || items[0].Kind != "directory" || items[1].Kind != "worktree" {
+		t.Fatalf("%v %#v", err, items)
+	}
+}
+
+func TestDependencyClosureUsesTopologicalOrder(t *testing.T) {
+	repositories := []domain.Repository{{Name: "ui", DependsOn: []string{"api"}}, {Name: "api", DependsOn: []string{"contract"}}, {Name: "contract"}, {Name: "unrelated"}}
+	selected, err := DependencyClosure(repositories, "ui")
+	if err != nil || len(selected) != 3 || selected[0].Name != "contract" || selected[1].Name != "api" || selected[2].Name != "ui" {
+		t.Fatalf("%v %#v", err, selected)
 	}
 }

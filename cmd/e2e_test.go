@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 type e2eFixture struct {
 	root             string
+	bin              string
 	tasks            string
 	repo             string
 	openspecLog      string
@@ -55,63 +57,33 @@ func newE2EFixture(t *testing.T) e2eFixture {
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	openspec := filepath.Join(binDir, "openspec")
+	fixtureBinary := buildFixtureBinary(t)
+	executableName := func(name string) string {
+		if runtime.GOOS == "windows" {
+			return name + ".exe"
+		}
+		return name
+	}
+	openspec := filepath.Join(binDir, executableName("openspec"))
 	openspecLog := filepath.Join(root, "openspec.log")
 	openspecFailOnce := filepath.Join(root, "openspec.fail-once")
 	openspecBlock := filepath.Join(root, "openspec.block")
 	openspecReady := filepath.Join(root, "openspec.ready")
 	openspecRelease := filepath.Join(root, "openspec.release")
-	script := "#!/bin/sh\n" +
-		"if [ \"$1\" = \"new\" ] && [ \"$2\" = \"change\" ]; then\n" +
-		"  printf '%s\\n' \"$*\" >> \"$SPECFLOW_E2E_OPENSPEC_LOG\" || exit 1\n" +
-		"  if [ -f \"$SPECFLOW_E2E_OPENSPEC_FAIL_ONCE\" ]; then\n" +
-		"    rm -f \"$SPECFLOW_E2E_OPENSPEC_FAIL_ONCE\"\n" +
-		"    printf '%s\\n' 'forced OpenSpec failure' >&2\n" +
-		"    exit 17\n" +
-		"  fi\n" +
-		"  if [ -f \"$SPECFLOW_E2E_OPENSPEC_BLOCK\" ]; then\n" +
-		"    : > \"$SPECFLOW_E2E_OPENSPEC_READY\"\n" +
-		"    count=0\n" +
-		"    while [ ! -f \"$SPECFLOW_E2E_OPENSPEC_RELEASE\" ]; do\n" +
-		"      count=$((count + 1))\n" +
-		"      [ \"$count\" -ge 200 ] && exit 98\n" +
-		"      sleep 0.05\n" +
-		"    done\n" +
-		"  fi\n" +
-		"  mkdir -p \"openspec/changes/$3\" || exit 1\n" +
-		"  printf '%s\\n' '# Tasks' '' '- [ ] Complete the change' > \"openspec/changes/$3/tasks.md\" || exit 1\n" +
-		"  printf '%s\\n' '{\"ok\":true}'\n" +
-		"  exit 0\n" +
-		"fi\n" +
-		"exit 1\n"
-	if err := os.WriteFile(openspec, []byte(script), 0755); err != nil {
+	if err := copyExecutable(fixtureBinary, openspec); err != nil {
 		t.Fatal(err)
 	}
 	toolLog := filepath.Join(root, "tools.log")
 	toolBlock := filepath.Join(root, "tool.block")
 	toolReady := filepath.Join(root, "tool.ready")
 	toolRelease := filepath.Join(root, "tool.release")
-	toolScript := "#!/bin/sh\n" +
-		"printf '%s|%s|%s|%s\\n' \"${0##*/}\" \"$PWD\" \"${CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD-}\" \"$*\" >> \"$SPECFLOW_E2E_TOOL_LOG\" || exit 1\n" +
-		"if [ -f \"$SPECFLOW_E2E_TOOL_BLOCK\" ]; then\n" +
-		"  : > \"$SPECFLOW_E2E_TOOL_READY\"\n" +
-		"  count=0\n" +
-		"  while [ ! -f \"$SPECFLOW_E2E_TOOL_RELEASE\" ]; do\n" +
-		"    count=$((count + 1))\n" +
-		"    [ \"$count\" -ge 200 ] && exit 98\n" +
-		"    sleep 0.05\n" +
-		"  done\n" +
-		"fi\n" +
-		"printf 'fixture %s\\n' \"${0##*/}\"\n"
 	for _, name := range []string{"codex", "claude"} {
-		if err := os.WriteFile(filepath.Join(binDir, name), []byte(toolScript), 0755); err != nil {
+		if err := copyExecutable(fixtureBinary, filepath.Join(binDir, executableName(name))); err != nil {
 			t.Fatal(err)
 		}
 	}
 	checkLog := filepath.Join(root, "checks.log")
-	checkScript := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$PWD\" >> \"$SPECFLOW_E2E_CHECK_LOG\" || exit 1\n"
-	if err := os.WriteFile(filepath.Join(binDir, "specflow-e2e-check"), []byte(checkScript), 0755); err != nil {
+	if err := copyExecutable(fixtureBinary, filepath.Join(binDir, executableName("specflow-e2e-check"))); err != nil {
 		t.Fatal(err)
 	}
 	tasks := filepath.Join(root, "tasks")
@@ -129,7 +101,35 @@ func newE2EFixture(t *testing.T) e2eFixture {
 	t.Setenv("SPECFLOW_E2E_TOOL_READY", toolReady)
 	t.Setenv("SPECFLOW_E2E_TOOL_RELEASE", toolRelease)
 	t.Setenv("SPECFLOW_E2E_CHECK_LOG", checkLog)
-	return e2eFixture{root: root, tasks: tasks, repo: repo, openspecLog: openspecLog, openspecFailOnce: openspecFailOnce, openspecBlock: openspecBlock, openspecReady: openspecReady, openspecRelease: openspecRelease, toolLog: toolLog, toolBlock: toolBlock, toolReady: toolReady, toolRelease: toolRelease, checkLog: checkLog}
+	return e2eFixture{root: root, bin: binDir, tasks: tasks, repo: repo, openspecLog: openspecLog, openspecFailOnce: openspecFailOnce, openspecBlock: openspecBlock, openspecReady: openspecReady, openspecRelease: openspecRelease, toolLog: toolLog, toolBlock: toolBlock, toolReady: toolReady, toolRelease: toolRelease, checkLog: checkLog}
+}
+
+func buildFixtureBinary(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate test file")
+	}
+	root := filepath.Dir(filepath.Dir(file))
+	name := "fixture"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(t.TempDir(), name)
+	cmd := exec.Command("go", "build", "-o", path, "./internal/testfixture")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build command fixture: %v: %s", err, out)
+	}
+	return path
+}
+
+func copyExecutable(source, target string) error {
+	b, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, b, 0755)
 }
 
 func runE2ECommand(t *testing.T, executable string, args ...string) []byte {
@@ -232,7 +232,8 @@ func configureTaskCheck(t *testing.T, tasks, taskID string) {
 type e2eState struct {
 	Phase        string `json:"phase"`
 	Repositories map[string]struct {
-		Error string `json:"error"`
+		Error   string                          `json:"error"`
+		Actions map[string]domain.ActionOutcome `json:"actions"`
 	} `json:"repositories"`
 }
 
@@ -315,8 +316,12 @@ func TestE2ECommandLifecycleInProcess(t *testing.T) {
 	if out, err := run("init", "task-1", "--primary", "repo", "--repo", "repo="+f.repo); err != nil || !strings.Contains(out, "initialized") {
 		t.Fatalf("init: code=%d err=%v output=%s", exitCode(err), err, out)
 	}
+	initializedFiles := snapshotTaskFiles(t, filepath.Join(f.tasks, "task-1"))
 	if out, err := run("init", "task-1", "--primary", "repo", "--repo", "repo="+f.repo); err != nil || !strings.Contains(out, `"initialized": false`) {
 		t.Fatalf("repeat init: code=%d err=%v output=%s", exitCode(err), err, out)
+	}
+	if repeatedFiles := snapshotTaskFiles(t, filepath.Join(f.tasks, "task-1")); !reflect.DeepEqual(initializedFiles, repeatedFiles) {
+		t.Fatal("repeat init changed existing task files")
 	}
 	configureTaskCheck(t, f.tasks, "task-1")
 	configOutput, err := run("--json", "config", "show", "task-1")
@@ -377,7 +382,7 @@ func TestE2ECommandLifecycleInProcess(t *testing.T) {
 		Actions []any `json:"actions"`
 	}
 	dryEnvelope := decodeResult(t, dryJSON)
-	if err := json.Unmarshal(dryEnvelope.Data, &dryData); err != nil || !dryEnvelope.OK || !dryData.DryRun || len(dryData.Actions) != 2 {
+	if err := json.Unmarshal(dryEnvelope.Data, &dryData); err != nil || !dryEnvelope.OK || !dryData.DryRun || len(dryData.Actions) != 3 {
 		t.Fatalf("unexpected JSON dry-run: err=%v envelope=%#v data=%#v", err, dryEnvelope, dryData)
 	}
 	if out, err := run("start", "task-1", "--execute"); err != nil || !strings.Contains(out, "started") {
@@ -440,8 +445,8 @@ func TestE2ECommandLifecycleInProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkCalls := logLines(t, f.checkLog)
-	if len(checkCalls) != 4 {
-		t.Fatalf("expected four configured check runs, got %v", checkCalls)
+	if len(checkCalls) != 2 {
+		t.Fatalf("expected two configured check runs, got %v", checkCalls)
 	}
 	for _, dir := range checkCalls {
 		if dir != canonicalCheckDir {
@@ -457,7 +462,11 @@ func buildE2EBinary(t *testing.T) string {
 		t.Fatal("cannot locate test file")
 	}
 	root := filepath.Dir(filepath.Dir(file))
-	path := filepath.Join(t.TempDir(), "specflow")
+	name := "specflow"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(t.TempDir(), name)
 	cmd := exec.Command("go", "build", "-o", path, ".")
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -528,14 +537,16 @@ func TestE2ECompiledBinaryOutputAndExitCodes(t *testing.T) {
 	var statusData struct {
 		Phase        string `json:"phase"`
 		Repositories []struct {
-			Branch        string `json:"branch"`
-			ChangePresent bool   `json:"changePresent"`
+			Branch   string `json:"branch"`
+			OpenSpec struct {
+				Present bool `json:"present"`
+			} `json:"openSpec"`
 		} `json:"repositories"`
 	}
 	if err := json.Unmarshal(statusEnvelope.Data, &statusData); err != nil {
 		t.Fatalf("decode status data: %v: %s", err, statusEnvelope.Data)
 	}
-	if !statusEnvelope.OK || statusData.Phase != "started" || len(statusData.Repositories) != 1 || statusData.Repositories[0].Branch != "feature/task-2" || !statusData.Repositories[0].ChangePresent {
+	if !statusEnvelope.OK || statusData.Phase != "started" || len(statusData.Repositories) != 1 || statusData.Repositories[0].Branch != "feature/task-2" || !statusData.Repositories[0].OpenSpec.Present {
 		t.Fatalf("unexpected binary status: %#v %#v", statusEnvelope, statusData)
 	}
 	out, _, code = runBinaryE2E(t, binary, "--tasks-root", f.tasks, "--json", "validate", "task-2")
@@ -595,12 +606,18 @@ func TestE2EStartFailureAndResume(t *testing.T) {
 		if state.Phase != "failed" || state.Repositories["repo"].Error == "" {
 			t.Fatalf("unexpected failed state: %#v", state)
 		}
+		if actions := state.Repositories["repo"].Actions; actions["worktree"].Status != domain.ActionCompleted || actions["openspec"].Status != domain.ActionFailed {
+			t.Fatalf("unexpected action outcomes after failure: %#v", actions)
+		}
 		if out, _, err := runCobraE2E(t, f.tasks, "start", "resume-task", "--execute"); err != nil || !strings.Contains(out, "started") {
 			t.Fatalf("resume start: code=%d err=%v output=%s", exitCode(err), err, out)
 		}
 		_, state = readState(t, f.tasks, "resume-task")
 		if state.Phase != "started" || state.Repositories["repo"].Error != "" {
 			t.Fatalf("unexpected resumed state: %#v", state)
+		}
+		if actions := state.Repositories["repo"].Actions; actions["worktree"].Status != domain.ActionCompleted || actions["openspec"].Status != domain.ActionCompleted {
+			t.Fatalf("unexpected action outcomes after resume: %#v", actions)
 		}
 		if count := bytes.Count(runE2ECommand(t, "git", "-C", f.repo, "worktree", "list", "--porcelain"), []byte("worktree ")); count != 2 {
 			t.Fatalf("resume created duplicate worktree: %d", count)
@@ -623,9 +640,10 @@ func TestE2EStartFailureAndResume(t *testing.T) {
 		if err := os.WriteFile(sentinel, []byte("preserve"), 0644); err != nil {
 			t.Fatal(err)
 		}
+		stateBefore, _ := readState(t, f.tasks, "target-task")
 		out, _, err := runCobraE2E(t, f.tasks, "--json", "start", "target-task", "--execute")
 		result := decodeResult(t, out)
-		if exitCode(err) != int(report.ExitPartial) || len(result.Errors) != 1 || result.Errors[0].Code != "START_FAILED" {
+		if exitCode(err) != int(report.ExitConflict) || len(result.Errors) != 1 || result.Errors[0].Code != "WORKTREE_MISMATCH" {
 			t.Fatalf("mismatched target: code=%d err=%v result=%#v", exitCode(err), err, result)
 		}
 		if b, err := os.ReadFile(sentinel); err != nil || string(b) != "preserve" {
@@ -633,6 +651,10 @@ func TestE2EStartFailureAndResume(t *testing.T) {
 		}
 		if calls := logLines(t, f.openspecLog); len(calls) != 0 {
 			t.Fatalf("mismatched target invoked OpenSpec: %v", calls)
+		}
+		stateAfter, _ := readState(t, f.tasks, "target-task")
+		if !bytes.Equal(stateBefore, stateAfter) {
+			t.Fatalf("mismatched target changed state\nbefore: %s\nafter: %s", stateBefore, stateAfter)
 		}
 	})
 }

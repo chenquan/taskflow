@@ -2,8 +2,8 @@
 
 > 面向“单个需求、多 Git 仓库、每仓库独立 OpenSpec、Git Worktree、Codex CLI 与 Claude Code”的可实现技术规格
 
-- 文档版本：2.0
-- 状态：待评审、待实现
+- 文档版本：2.1
+- 状态：核心生命周期已实现并加固
 - 实现语言：Go
 - CLI 名称：`specflow`
 - AI Skill 名称：`openspec-multirepo`
@@ -250,12 +250,11 @@ development:
 execution:
   fetch: true
   create_openspec_change: true
-  create_workset: false
-  commit: false
-  push: false
-  archive: false
-  cleanup: false
 ```
+
+版本 1 配置在当前实现中被直接重新定义：`execution` 只接受上述两个字段，且
+`create_openspec_change` 必须显式出现。旧配置中的 `create_workset`、`commit`、
+`push`、`archive`、`cleanup` 会作为未知字段失败；CLI 不进行隐式迁移或重写。
 
 ### 5.2 配置规则
 
@@ -382,7 +381,8 @@ CREATE CHANGE   refund-123-payment-sdk
 - 子进程继承 stdin/stdout/stderr。
 - 主 worktree 作为 cwd。
 - 其他 worktree 与任务根作为附加目录。
-- 子进程退出后释放会话租约并透传退出码。
+- 子进程退出后释放会话租约。specflow 固定返回执行错误码 1，并在结果数据的
+  `childExitCode` 中保留开发工具的真实退出码，避免与 specflow 的 0-7 协议冲突。
 - 同一任务已有活动开发会话时拒绝启动第二个写会话。
 - 不自动添加任何危险权限参数。
 
@@ -406,10 +406,10 @@ CREATE CHANGE   refund-123-payment-sdk
 2. 对每个仓库执行 `openspec validate <change> --strict --json`。
 3. 获取 `openspec status --change <change> --json`。
 4. 执行仓库 checks。
-5. 按配置执行 integration checks。
-6. 生成聚合报告。
+5. 生成包含规范化配置摘要、验证范围和各 worktree HEAD 的原子验证报告。
 
-无依赖的仓库可并发验证；有依赖关系的仓库按拓扑层并发。默认并发数使用较小值并允许配置，避免耗尽机器资源。
+仓库按依赖优先的拓扑顺序串行验证。`--repo` 会验证目标仓库及其完整依赖闭包，
+不会只运行孤立的下游检查。配置、验证范围或任一 HEAD 改变后，旧报告立即过期。
 
 ### 6.8 `finish`
 
@@ -422,6 +422,10 @@ MVP 只生成报告：
 - 推荐归档顺序；
 - 推荐合并顺序；
 - 哪些条件阻止清理。
+
+`finish --dry-run` 严格只读：不重跑任意 repository check，不写状态或报告。它要求
+最近一次完整 `validate` 成功且配置摘要、验证范围、所有 HEAD 仍匹配，然后再读取
+Git 和 OpenSpec 当前事实生成依赖优先的合并顺序与反向归档/清理建议。
 
 第二阶段再增加：
 
@@ -458,27 +462,22 @@ specflow cleanup REFUND-123 --execute
 
 ```text
 specflow/
-├── cmd/
-│   └── specflow/
-│       └── main.go
+├── cmd/                 # Cobra 命令、输出协议和端到端测试
 ├── internal/
 │   ├── app/              # 用例编排
 │   ├── command/          # Cobra 命令和输入输出适配
 │   ├── config/           # YAML 加载、严格校验、迁移
 │   ├── domain/           # Task、Repository、Plan、State
-│   ├── discovery/        # 仓库扫描和元数据发现
 │   ├── git/              # Git Adapter
 │   ├── openspec/         # OpenSpec Adapter
 │   ├── devtool/          # Codex、Claude 启动 Adapter
-│   ├── planner/          # dry-run 执行计划
-│   ├── executor/         # 有序、幂等动作执行
-│   ├── state/            # 状态存储与恢复
+│   ├── plan/             # dry-run 执行计划和拓扑排序
 │   ├── lock/             # 任务锁和会话租约
 │   ├── report/           # 文本/JSON 输出
 │   ├── execx/            # 无 shell 的进程执行器
 │   └── fsx/              # 安全路径和原子写
-├── testdata/
-├── scripts/
+│   └── testfixture/      # 跨平台进程级测试命令
+├── .github/workflows/ci.yml
 ├── .goreleaser.yaml
 ├── go.mod
 └── go.sum
@@ -899,7 +898,7 @@ OpenSpec 可使用假的可执行文件完成大部分测试，再保留少量�
 - 两者都不会携带权限绕过参数。
 - Claude 不携带 `--worktree`。
 - Codex 活动时 Claude 启动被拒绝，反之亦然。
-- 子进程退出码被透传，锁被释放。
+- 子进程真实退出码写入 `childExitCode`，specflow 返回 1，锁被释放。
 
 ### 14.5 跨平台 CI
 
@@ -914,12 +913,18 @@ windows-latest  amd64
 CI 步骤：
 
 ```bash
-go test -race ./...
+go test ./...
+go test -race ./... # Linux/macOS
 go vet ./...
-go test ./... -run Integration
+go test -coverpkg=./... -coverprofile=coverage.out ./...
+go run ./internal/tools/coveragecheck -profile coverage.out -min 80
+openspec validate --all --strict --no-interactive
+goreleaser release --snapshot --clean
 ```
 
-Windows 上 race detector 的可用性和耗时可单独配置，不让平台差异阻塞基础测试。
+基础测试与 vet 覆盖 Linux、macOS、Windows；race detector 在 Linux、macOS 运行。
+CI 固定安装 OpenSpec 1.4.1，真实适配器集成测试会验证 status/strict validate JSON 契约。
+覆盖率只排除进程 fixture、覆盖率工具自身和根入口包装，合并生产语句门槛为 80%。
 
 ## 15. 实施阶段
 

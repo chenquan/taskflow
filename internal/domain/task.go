@@ -53,11 +53,6 @@ type ToolDef struct {
 type Execution struct {
 	Fetch                bool `yaml:"fetch" json:"fetch"`
 	CreateOpenSpecChange bool `yaml:"create_openspec_change" json:"createOpenSpecChange"`
-	CreateWorkset        bool `yaml:"create_workset" json:"createWorkset"`
-	Commit               bool `yaml:"commit" json:"commit"`
-	Push                 bool `yaml:"push" json:"push"`
-	Archive              bool `yaml:"archive" json:"archive"`
-	Cleanup              bool `yaml:"cleanup" json:"cleanup"`
 }
 
 type Inventory struct {
@@ -77,10 +72,99 @@ type State struct {
 	TaskID        string                     `json:"taskID"`
 	Phase         string                     `json:"phase"`
 	UpdatedAt     time.Time                  `json:"updatedAt"`
+	Directory     ActionOutcome              `json:"directory,omitempty"`
 	Repositories  map[string]RepositoryState `json:"repositories,omitempty"`
 }
 type RepositoryState struct {
-	Worktree string `json:"worktree"`
-	Change   string `json:"change"`
-	Error    string `json:"error,omitempty"`
+	Worktree string                   `json:"worktree"`
+	Change   string                   `json:"change,omitempty"`
+	Actions  map[string]ActionOutcome `json:"actions,omitempty"`
+	Error    string                   `json:"error,omitempty"`
+}
+
+const (
+	ActionPending   = "pending"
+	ActionCompleted = "completed"
+	ActionSkipped   = "skipped"
+	ActionFailed    = "failed"
+)
+
+type ActionOutcome struct {
+	Status    string    `json:"status,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+	Error     string    `json:"error,omitempty"`
+}
+
+type OpenSpecSummary struct {
+	Configured    bool   `json:"configured"`
+	Change        string `json:"change,omitempty"`
+	Present       bool   `json:"present"`
+	Valid         bool   `json:"valid"`
+	Complete      bool   `json:"complete"`
+	TasksTotal    int    `json:"tasksTotal"`
+	TasksComplete int    `json:"tasksComplete"`
+	Schema        string `json:"schema,omitempty"`
+}
+
+type CheckResult struct {
+	Name       string `json:"name"`
+	Executable string `json:"executable"`
+	OK         bool   `json:"ok"`
+	ExitCode   int    `json:"exitCode"`
+	TimedOut   bool   `json:"timedOut"`
+	Stderr     string `json:"stderr,omitempty"`
+}
+
+type RepositoryValidation struct {
+	Name     string          `json:"name"`
+	Head     string          `json:"head"`
+	OpenSpec OpenSpecSummary `json:"openSpec"`
+	Checks   []CheckResult   `json:"checks"`
+	OK       bool            `json:"ok"`
+}
+
+type ValidationReport struct {
+	SchemaVersion int                             `json:"schemaVersion"`
+	TaskID        string                          `json:"taskID"`
+	ConfigDigest  string                          `json:"configDigest"`
+	Scope         []string                        `json:"scope"`
+	CompletedAt   time.Time                       `json:"completedAt"`
+	OK            bool                            `json:"ok"`
+	Repositories  map[string]RepositoryValidation `json:"repositories"`
+}
+
+type RepositoryStatus struct {
+	Name             string          `json:"name"`
+	Worktree         string          `json:"worktree"`
+	Branch           string          `json:"branch,omitempty"`
+	Head             string          `json:"head,omitempty"`
+	Dirty            bool            `json:"dirty"`
+	DirtyFiles       int             `json:"dirtyFiles"`
+	Upstream         string          `json:"upstream,omitempty"`
+	Ahead            int             `json:"ahead"`
+	Behind           int             `json:"behind"`
+	Pushed           bool            `json:"pushed"`
+	DependencyReady  bool            `json:"dependencyReady"`
+	OpenSpec         OpenSpecSummary `json:"openSpec"`
+	LastValidationOK *bool           `json:"lastValidationOK,omitempty"`
+	Error            string          `json:"error,omitempty"`
+}
+
+type StatusData struct {
+	Phase          string             `json:"phase"`
+	Repositories   []RepositoryStatus `json:"repositories"`
+	ActiveSession  any                `json:"activeSession,omitempty"`
+	LastValidation *ValidationReport  `json:"lastValidation,omitempty"`
+}
+
+type FinishData struct {
+	Status          StatusData        `json:"status"`
+	Validation      *ValidationReport `json:"validation,omitempty"`
+	ValidationOrder []string          `json:"validationOrder"`
+	MergeOrder      []string          `json:"mergeOrder"`
+	ArchiveOrder    []string          `json:"archiveOrder"`
+	CleanupOrder    []string          `json:"cleanupOrder"`
+	CleanupBlockers []string          `json:"cleanupBlockers"`
+	Archive         string            `json:"archive"`
+	Cleanup         string            `json:"cleanup"`
 }

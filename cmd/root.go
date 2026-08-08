@@ -91,16 +91,19 @@ func NewRootCommand() *cobra.Command {
 		r, code := svc.Status(context.Background(), t)
 		return render(c, r, code)
 	}})
-	root.AddCommand(&cobra.Command{Use: "validate <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+	var validateRepo string
+	validate := &cobra.Command{Use: "validate <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
 		t, e := svc.Load(tasksRoot, args[0])
 		if e != nil {
 			r := report.New("validate", args[0])
 			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: e.Error()})
 			return render(c, r, report.ExitConfig)
 		}
-		r, code := svc.Validate(context.Background(), t)
+		r, code := svc.ValidateScoped(context.Background(), t, validateRepo)
 		return render(c, r, code)
-	}})
+	}}
+	validate.Flags().StringVar(&validateRepo, "repo", "", "validate this repository and its dependencies")
+	root.AddCommand(validate)
 	var finishDryRun bool
 	finish := &cobra.Command{Use: "finish <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
 		if !finishDryRun {

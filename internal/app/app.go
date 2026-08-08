@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -73,7 +75,7 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 		}
 		repos = append(repos, domain.Repository{Name: parts[0], Source: source, Worktree: filepath.Join("worktrees", parts[0])})
 	}
-	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Title: o.TaskID, Root: root}, Primary: o.Primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex", "claude"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}, "claude": {Executable: "claude", LaunchMode: "direct", LoadAdditionalInstructions: true}}}}
+	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Title: o.TaskID, Root: root}, Primary: o.Primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex", "claude"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}, "claude": {Executable: "claude", LaunchMode: "direct", LoadAdditionalInstructions: true}}}, Execution: domain.Execution{CreateOpenSpecChange: true}}
 	if err = config.Validate(&t); err != nil {
 		res.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
 		return res, report.ExitConfig
@@ -160,6 +162,7 @@ func (s Service) Load(tasksRoot, taskID string) (domain.Task, error) {
 }
 func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report.Result, report.ExitCode) {
 	res := report.New("doctor", t.Task.ID)
+	versions := map[string]string{}
 	if only != "" {
 		found := false
 		for _, r := range t.Repositories {
@@ -172,9 +175,21 @@ func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report
 			return res, report.ExitConfig
 		}
 	}
-	for _, tool := range []string{"git", "openspec"} {
+	requiredTools := []string{"git"}
+	if t.Execution.CreateOpenSpecChange {
+		requiredTools = append(requiredTools, "openspec")
+	}
+	for _, tool := range requiredTools {
 		if _, err := s.Runner.LookPath(tool); err != nil {
 			res.Fail(report.Diagnostic{Code: "TOOL_NOT_FOUND", Message: tool + " is not executable"})
+			continue
+		}
+		versionArgs := []string{"--version"}
+		version, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: tool, Args: versionArgs})
+		if err != nil || strings.TrimSpace(version.Stdout) == "" {
+			res.Fail(report.Diagnostic{Code: "TOOL_VERSION_UNAVAILABLE", Message: tool + " version/capability probe failed"})
+		} else {
+			versions[tool] = strings.TrimSpace(version.Stdout)
 		}
 	}
 	for _, tool := range t.Development.EnabledTools {
@@ -182,6 +197,13 @@ func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report
 		if def.Executable != "" {
 			if _, err := s.Runner.LookPath(def.Executable); err != nil {
 				res.Warn(report.Diagnostic{Code: "DEV_TOOL_NOT_FOUND", Message: def.Executable + " is not executable"})
+				continue
+			}
+			version, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: def.Executable, Args: []string{"--version"}})
+			if err != nil || strings.TrimSpace(version.Stdout) == "" {
+				res.Warn(report.Diagnostic{Code: "DEV_TOOL_VERSION_UNAVAILABLE", Message: def.Executable + " version probe failed"})
+			} else {
+				versions[tool] = strings.TrimSpace(version.Stdout)
 			}
 		}
 	}
@@ -200,12 +222,36 @@ func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report
 		if !s.Git.HasRef(ctx, r.Source, r.Base) {
 			res.Fail(report.Diagnostic{Code: "BASE_REF_NOT_FOUND", Repo: r.Name, Message: "base ref " + r.Base + " does not exist", Hint: "fetch the remote or correct repositories[].base"})
 		}
-		if !git.IsOpenSpec(r.Source) {
+		if t.Execution.CreateOpenSpecChange && !git.IsOpenSpec(r.Source) {
 			res.Fail(report.Diagnostic{Code: "OPENSPEC_NOT_INITIALIZED", Repo: r.Name, Message: "source repository has no openspec directory"})
 		}
 		target := filepath.Join(t.Task.Root, r.Worktree)
 		if !fsx.Within(filepath.Join(t.Task.Root, "worktrees"), target) {
 			res.Fail(report.Diagnostic{Code: "WORKTREE_PATH_UNSAFE", Repo: r.Name, Message: "worktree path escapes task worktrees"})
+		}
+		worktrees, err := s.Git.Worktrees(ctx, r.Source)
+		if err != nil {
+			res.Fail(report.Diagnostic{Code: "WORKTREE_INSPECTION_FAILED", Repo: r.Name, Message: err.Error()})
+		} else {
+			matched := false
+			for _, worktree := range worktrees {
+				if worktree.Branch == r.Branch && !samePath(worktree.Path, target) {
+					res.Fail(report.Diagnostic{Code: "BRANCH_OCCUPIED", Repo: r.Name, Message: fmt.Sprintf("branch %s is already checked out at %s", r.Branch, worktree.Path)})
+				}
+				if samePath(worktree.Path, target) {
+					matched = true
+					if worktree.Branch != r.Branch {
+						res.Fail(report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: r.Name, Message: fmt.Sprintf("target has branch %s, expected %s", worktree.Branch, r.Branch)})
+					}
+				}
+			}
+			if !matched {
+				if _, statErr := os.Stat(target); statErr == nil {
+					res.Fail(report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: r.Name, Message: "target exists but is not the configured worktree"})
+				} else if !os.IsNotExist(statErr) {
+					res.Fail(report.Diagnostic{Code: "WORKTREE_TARGET_UNREADABLE", Repo: r.Name, Message: statErr.Error()})
+				}
+			}
 		}
 		for _, c := range r.Checks {
 			if _, err := s.Runner.LookPath(c.Executable); err != nil {
@@ -213,6 +259,7 @@ func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report
 			}
 		}
 	}
+	res.Data = map[string]any{"versions": versions}
 	if len(res.Errors) > 0 {
 		return res, report.ExitEnvironment
 	}
@@ -241,71 +288,86 @@ func (s Service) Start(ctx context.Context, t domain.Task, o StartOptions) (repo
 		return res, report.ExitConflict
 	}
 	defer l.Release()
-	if !s.OpenSpec.Available() {
-		res.Fail(report.Diagnostic{Code: "OPENSPEC_NOT_AVAILABLE", Message: "openspec is not executable"})
-		return res, report.ExitToolCompatibility
+	ordered, _ := plan.Order(t.Repositories)
+	if diagnostic, code := s.preflightStart(ctx, t, ordered); diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
 	}
-	state := domain.State{SchemaVersion: 1, TaskID: t.Task.ID, Phase: "starting", UpdatedAt: time.Now().UTC(), Repositories: map[string]domain.RepositoryState{}}
-	for _, r := range t.Repositories {
-		state.Repositories[r.Name] = domain.RepositoryState{Worktree: r.Worktree, Change: r.Change}
+	now := time.Now().UTC()
+	state := domain.State{SchemaVersion: 1, TaskID: t.Task.ID, Phase: "starting", UpdatedAt: now, Directory: pendingOutcome(now), Repositories: map[string]domain.RepositoryState{}}
+	for _, repository := range t.Repositories {
+		actions := map[string]domain.ActionOutcome{"worktree": pendingOutcome(now)}
+		if t.Execution.Fetch {
+			actions["fetch"] = pendingOutcome(now)
+		} else {
+			actions["fetch"] = skippedOutcome(now)
+		}
+		if t.Execution.CreateOpenSpecChange {
+			actions["openspec"] = pendingOutcome(now)
+		} else {
+			actions["openspec"] = skippedOutcome(now)
+		}
+		state.Repositories[repository.Name] = domain.RepositoryState{Worktree: repository.Worktree, Change: repository.Change, Actions: actions}
 	}
 	if err := persistState(t, state); err != nil {
 		res.Fail(report.Diagnostic{Code: "STATE_WRITE_FAILED", Message: err.Error()})
 		return res, report.ExitExecution
 	}
-	ordered, _ := plan.Order(t.Repositories)
-	for _, r := range ordered {
+	if err = os.MkdirAll(filepath.Join(t.Task.Root, "worktrees"), 0755); err != nil {
+		return startActionFailure(res, &state, t, "", "directory", err)
+	}
+	state.Directory = completedOutcome()
+	if err = persistState(t, state); err != nil {
+		return startActionFailure(res, &state, t, "", "directory", err)
+	}
+	for _, repository := range ordered {
 		if t.Execution.Fetch {
-			remote := fetchRemote(r.Base)
-			if !s.Git.RemoteExists(ctx, r.Source, remote) {
-				if remote != "origin" && s.Git.RemoteExists(ctx, r.Source, "origin") {
-					remote = "origin"
-				} else {
-					return startFailure(res, &state, t, r.Name, fmt.Errorf("fetch remote %s does not exist", remote))
-				}
+			remote := fetchRemote(repository.Base)
+			if !s.Git.RemoteExists(ctx, repository.Source, remote) && remote != "origin" && s.Git.RemoteExists(ctx, repository.Source, "origin") {
+				remote = "origin"
 			}
-			if e := s.Git.Fetch(ctx, r.Source, remote); e != nil {
-				return startFailure(res, &state, t, r.Name, e)
+			if err = s.Git.Fetch(ctx, repository.Source, remote); err != nil {
+				return startActionFailure(res, &state, t, repository.Name, "fetch", err)
+			}
+			if !s.Git.HasRef(ctx, repository.Source, repository.Base) {
+				return startActionFailure(res, &state, t, repository.Name, "fetch", fmt.Errorf("base ref %s does not exist after fetch", repository.Base))
+			}
+			setAction(&state, repository.Name, "fetch", completedOutcome())
+			if err = persistState(t, state); err != nil {
+				return startActionFailure(res, &state, t, repository.Name, "fetch", err)
 			}
 		}
-		target := filepath.Join(t.Task.Root, r.Worktree)
-		worktrees, e := s.Git.Worktrees(ctx, r.Source)
-		if e != nil {
-			return startFailure(res, &state, t, r.Name, e)
+		target := filepath.Join(t.Task.Root, repository.Worktree)
+		worktrees, worktreeErr := s.Git.Worktrees(ctx, repository.Source)
+		if worktreeErr != nil {
+			return startActionFailure(res, &state, t, repository.Name, "worktree", worktreeErr)
 		}
 		matched := false
-		for _, w := range worktrees {
-			if samePath(w.Path, target) {
-				if w.Branch != r.Branch {
-					return startFailure(res, &state, t, r.Name, fmt.Errorf("target %s has branch %s, expected %s", target, w.Branch, r.Branch))
-				}
+		for _, worktree := range worktrees {
+			if samePath(worktree.Path, target) && worktree.Branch == repository.Branch {
 				matched = true
+				break
 			}
 		}
 		if !matched {
-			if _, e = os.Stat(target); e == nil {
-				return startFailure(res, &state, t, r.Name, fmt.Errorf("target %s exists but is not the configured worktree", target))
-			}
-			if e != nil && !os.IsNotExist(e) {
-				return startFailure(res, &state, t, r.Name, e)
-			}
-			if e = os.MkdirAll(filepath.Dir(target), 0755); e != nil {
-				return startFailure(res, &state, t, r.Name, e)
-			}
-			if e = s.Git.AddWorktree(ctx, r.Source, r.Branch, target, r.Base); e != nil {
-				return startFailure(res, &state, t, r.Name, e)
+			if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, target, repository.Base); err != nil {
+				return startActionFailure(res, &state, t, repository.Name, "worktree", err)
 			}
 		}
-		if e = persistState(t, state); e != nil {
-			return startFailure(res, &state, t, r.Name, e)
+		setAction(&state, repository.Name, "worktree", completedOutcome())
+		if err = persistState(t, state); err != nil {
+			return startActionFailure(res, &state, t, repository.Name, "worktree", err)
 		}
-		if !s.OpenSpec.ChangeExists(target, r.Change) {
-			if e = s.OpenSpec.CreateChange(ctx, target, r.Change); e != nil {
-				return startFailure(res, &state, t, r.Name, e)
+		if t.Execution.CreateOpenSpecChange {
+			if !s.OpenSpec.ChangeExists(target, repository.Change) {
+				if err = s.OpenSpec.CreateChange(ctx, target, repository.Change); err != nil {
+					return startActionFailure(res, &state, t, repository.Name, "openspec", err)
+				}
 			}
-		}
-		if e = persistState(t, state); e != nil {
-			return startFailure(res, &state, t, r.Name, e)
+			setAction(&state, repository.Name, "openspec", completedOutcome())
+			if err = persistState(t, state); err != nil {
+				return startActionFailure(res, &state, t, repository.Name, "openspec", err)
+			}
 		}
 	}
 	state.Phase = "started"
@@ -318,14 +380,104 @@ func (s Service) Start(ctx context.Context, t domain.Task, o StartOptions) (repo
 	return res, report.ExitOK
 }
 
-func startFailure(res report.Result, state *domain.State, t domain.Task, repo string, err error) (report.Result, report.ExitCode) {
+func (s Service) preflightStart(ctx context.Context, task domain.Task, ordered []domain.Repository) (*report.Diagnostic, report.ExitCode) {
+	if task.Execution.CreateOpenSpecChange && !s.OpenSpec.Available() {
+		return &report.Diagnostic{Code: "OPENSPEC_NOT_AVAILABLE", Message: "openspec is not executable"}, report.ExitToolCompatibility
+	}
+	for _, repository := range ordered {
+		sourceInfo, err := s.Git.Inspect(ctx, repository.Source)
+		if err != nil {
+			return &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
+		}
+		if !s.Git.HasRef(ctx, repository.Source, repository.Base) && !task.Execution.Fetch {
+			return &report.Diagnostic{Code: "BASE_REF_NOT_FOUND", Repo: repository.Name, Message: "base ref " + repository.Base + " does not exist"}, report.ExitEnvironment
+		}
+		if task.Execution.Fetch {
+			remote := fetchRemote(repository.Base)
+			if !s.Git.RemoteExists(ctx, repository.Source, remote) && !(remote != "origin" && s.Git.RemoteExists(ctx, repository.Source, "origin")) {
+				return &report.Diagnostic{Code: "FETCH_REMOTE_NOT_FOUND", Repo: repository.Name, Message: "fetch remote " + remote + " does not exist"}, report.ExitEnvironment
+			}
+		}
+		if task.Execution.CreateOpenSpecChange && !git.IsOpenSpec(repository.Source) {
+			return &report.Diagnostic{Code: "OPENSPEC_NOT_INITIALIZED", Repo: repository.Name, Message: "source repository has no openspec directory"}, report.ExitEnvironment
+		}
+		target := filepath.Join(task.Task.Root, repository.Worktree)
+		worktrees, err := s.Git.Worktrees(ctx, repository.Source)
+		if err != nil {
+			return &report.Diagnostic{Code: "WORKTREE_INSPECTION_FAILED", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
+		}
+		matched := false
+		for _, worktree := range worktrees {
+			if worktree.Branch == repository.Branch && !samePath(worktree.Path, target) {
+				return &report.Diagnostic{Code: "BRANCH_OCCUPIED", Repo: repository.Name, Message: fmt.Sprintf("branch %s is already checked out at %s", repository.Branch, worktree.Path)}, report.ExitConflict
+			}
+			if !samePath(worktree.Path, target) {
+				continue
+			}
+			if worktree.Branch != repository.Branch {
+				return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s has branch %s, expected %s", target, worktree.Branch, repository.Branch)}, report.ExitConflict
+			}
+			targetInfo, inspectErr := s.Git.Inspect(ctx, target)
+			if inspectErr != nil || sourceInfo.CommonDir == "" || targetInfo.CommonDir != sourceInfo.CommonDir {
+				return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s does not belong to the configured source", target)}, report.ExitConflict
+			}
+			matched = true
+		}
+		if !matched {
+			if _, err = os.Stat(target); err == nil {
+				return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s exists but is not the configured worktree", target)}, report.ExitConflict
+			}
+			if !os.IsNotExist(err) {
+				return &report.Diagnostic{Code: "WORKTREE_TARGET_UNREADABLE", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
+			}
+		} else if task.Execution.CreateOpenSpecChange && s.OpenSpec.ChangeExists(target, repository.Change) {
+			if _, statusErr := s.OpenSpec.Status(ctx, target, repository.Change); statusErr != nil {
+				var compatibility openspec.CompatibilityError
+				if errors.As(statusErr, &compatibility) {
+					return &report.Diagnostic{Code: "OPENSPEC_CHANGE_INCOMPATIBLE", Repo: repository.Name, Message: statusErr.Error()}, report.ExitToolCompatibility
+				}
+				return &report.Diagnostic{Code: "OPENSPEC_CHANGE_INSPECTION_FAILED", Repo: repository.Name, Message: statusErr.Error()}, report.ExitEnvironment
+			}
+		}
+	}
+	return nil, report.ExitOK
+}
+
+func pendingOutcome(now time.Time) domain.ActionOutcome {
+	return domain.ActionOutcome{Status: domain.ActionPending, UpdatedAt: now}
+}
+func skippedOutcome(now time.Time) domain.ActionOutcome {
+	return domain.ActionOutcome{Status: domain.ActionSkipped, UpdatedAt: now}
+}
+func completedOutcome() domain.ActionOutcome {
+	return domain.ActionOutcome{Status: domain.ActionCompleted, UpdatedAt: time.Now().UTC()}
+}
+func setAction(state *domain.State, repository, action string, outcome domain.ActionOutcome) {
+	value := state.Repositories[repository]
+	if value.Actions == nil {
+		value.Actions = map[string]domain.ActionOutcome{}
+	}
+	value.Actions[action] = outcome
+	value.Error = ""
+	state.Repositories[repository] = value
+	state.UpdatedAt = time.Now().UTC()
+}
+func startActionFailure(res report.Result, state *domain.State, task domain.Task, repository, action string, err error) (report.Result, report.ExitCode) {
 	state.Phase = "failed"
 	state.UpdatedAt = time.Now().UTC()
-	v := state.Repositories[repo]
-	v.Error = err.Error()
-	state.Repositories[repo] = v
-	_ = persistState(t, *state)
-	res.Fail(report.Diagnostic{Code: "START_FAILED", Repo: repo, Message: err.Error()})
+	if repository == "" {
+		state.Directory = domain.ActionOutcome{Status: domain.ActionFailed, UpdatedAt: state.UpdatedAt, Error: err.Error()}
+	} else {
+		value := state.Repositories[repository]
+		if value.Actions == nil {
+			value.Actions = map[string]domain.ActionOutcome{}
+		}
+		value.Actions[action] = domain.ActionOutcome{Status: domain.ActionFailed, UpdatedAt: state.UpdatedAt, Error: err.Error()}
+		value.Error = err.Error()
+		state.Repositories[repository] = value
+	}
+	_ = persistState(task, *state)
+	res.Fail(report.Diagnostic{Code: "START_FAILED", Repo: repository, Message: err.Error()})
 	return res, report.ExitPartial
 }
 func persistState(t domain.Task, s domain.State) error {
@@ -368,6 +520,7 @@ func (s Service) Open(ctx context.Context, t domain.Task, tool string, stdin io.
 	defer holder.Release()
 	res, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: spec.Executable, Args: spec.Args, Dir: spec.Dir, Stdin: stdin, Stdout: stdout, Stderr: stderr, Env: spec.Env})
 	if err != nil {
+		r.Data = map[string]any{"tool": tool, "executable": spec.Executable, "childExitCode": res.ExitCode}
 		r.Fail(report.Diagnostic{Code: "TOOL_EXITED", Message: fmt.Sprintf("%s exited with code %d", tool, res.ExitCode)})
 		return r, report.ExitExecution
 	}
@@ -376,97 +529,307 @@ func (s Service) Open(ctx context.Context, t domain.Task, tool string, stdin io.
 }
 func (s Service) Status(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
 	r := report.New("status", t.Task.ID)
-	data := map[string]any{"phase": "unknown", "repositories": []any{}}
+	data := domain.StatusData{Phase: "unknown", Repositories: []domain.RepositoryStatus{}}
 	if b, e := os.ReadFile(filepath.Join(t.Task.Root, ".specflow", "state.json")); e == nil {
 		var st domain.State
 		if json.Unmarshal(b, &st) == nil {
-			data["phase"] = st.Phase
+			data.Phase = st.Phase
 		}
 	}
 	if lease, e := session.Active(t.Task.Root); e != nil {
 		r.Warn(report.Diagnostic{Code: "SESSION_READ_FAILED", Message: e.Error()})
 	} else {
-		data["activeSession"] = lease
+		data.ActiveSession = lease
 	}
-	repos := []any{}
-	for _, repo := range t.Repositories {
-		worktree := filepath.Join(t.Task.Root, repo.Worktree)
+	validation, _ := loadValidationReport(t)
+	data.LastValidation = validation
+	statusByName := map[string]int{}
+	compatibilityFailure := false
+	for _, repository := range t.Repositories {
+		worktree := filepath.Join(t.Task.Root, repository.Worktree)
 		info, e := s.Git.Inspect(ctx, worktree)
-		entry := map[string]any{"name": repo.Name, "worktree": worktree, "change": repo.Change}
+		entry := domain.RepositoryStatus{Name: repository.Name, Worktree: worktree, DependencyReady: true, OpenSpec: domain.OpenSpecSummary{Configured: t.Execution.CreateOpenSpecChange, Change: repository.Change}}
 		if e != nil {
-			entry["error"] = e.Error()
+			entry.Error = e.Error()
 		} else {
-			entry["dirty"] = info.Dirty
-			entry["branch"] = info.Branch
+			entry.Branch, entry.Head, entry.Dirty, entry.DirtyFiles = info.Branch, info.Head, info.Dirty, info.DirtyFiles
+			entry.Upstream, entry.Ahead, entry.Behind = info.Upstream, info.Ahead, info.Behind
+			entry.Pushed = info.Upstream != "" && info.Ahead == 0
 		}
-		entry["changePresent"] = s.OpenSpec.ChangeExists(worktree, repo.Change)
-		repos = append(repos, entry)
+		if t.Execution.CreateOpenSpecChange {
+			entry.OpenSpec.Present = s.OpenSpec.ChangeExists(worktree, repository.Change)
+			if entry.OpenSpec.Present {
+				summary, summaryErr := s.inspectOpenSpec(ctx, worktree, repository.Change, false)
+				if summaryErr != nil {
+					entry.Error = summaryErr.Error()
+					var compatibility openspec.CompatibilityError
+					compatibilityFailure = compatibilityFailure || errors.As(summaryErr, &compatibility)
+				} else {
+					entry.OpenSpec = summary
+				}
+			}
+		} else {
+			entry.OpenSpec.Valid, entry.OpenSpec.Complete = true, true
+		}
+		if validation != nil {
+			if repositoryValidation, ok := validation.Repositories[repository.Name]; ok {
+				value := repositoryValidation.OK
+				entry.LastValidationOK = &value
+			}
+		}
+		data.Repositories = append(data.Repositories, entry)
+		statusByName[repository.Name] = len(data.Repositories) - 1
 	}
-	data["repositories"] = repos
+	for index := range data.Repositories {
+		repository := t.Repositories[index]
+		for _, dependency := range repository.DependsOn {
+			dependencyIndex, found := statusByName[dependency]
+			if !found {
+				data.Repositories[index].DependencyReady = false
+				continue
+			}
+			dependencyStatus := data.Repositories[dependencyIndex]
+			if dependencyStatus.Error != "" || dependencyStatus.Head == "" || (dependencyStatus.OpenSpec.Configured && !dependencyStatus.OpenSpec.Complete) {
+				data.Repositories[index].DependencyReady = false
+			}
+		}
+	}
 	r.Data = data
-	if !r.OK {
-		return r, report.ExitValidation
+	if compatibilityFailure {
+		r.Fail(report.Diagnostic{Code: "OPENSPEC_INCOMPATIBLE", Message: "one or more OpenSpec status responses are incompatible"})
+		return r, report.ExitToolCompatibility
 	}
 	return r, report.ExitOK
 }
 func (s Service) Validate(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
+	return s.validate(ctx, t, "")
+}
+func (s Service) ValidateScoped(ctx context.Context, t domain.Task, only string) (report.Result, report.ExitCode) {
+	return s.validate(ctx, t, only)
+}
+func (s Service) validate(ctx context.Context, t domain.Task, only string) (report.Result, report.ExitCode) {
 	r := report.New("validate", t.Task.ID)
-	failed := false
 	ordered, err := plan.Order(t.Repositories)
 	if err != nil {
 		r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
 		return r, report.ExitConfig
 	}
-	for _, repo := range ordered {
-		worktree := filepath.Join(t.Task.Root, repo.Worktree)
-		if !s.OpenSpec.ChangeExists(worktree, repo.Change) {
-			r.Fail(report.Diagnostic{Code: "OPENSPEC_CHANGE_MISSING", Repo: repo.Name, Message: "configured OpenSpec change is missing"})
-			failed = true
-		} else if complete, err := s.OpenSpec.ChangeComplete(worktree, repo.Change); err != nil {
-			r.Fail(report.Diagnostic{Code: "OPENSPEC_TASKS_UNREADABLE", Repo: repo.Name, Message: err.Error()})
-			failed = true
-		} else if !complete {
-			r.Fail(report.Diagnostic{Code: "OPENSPEC_TASKS_INCOMPLETE", Repo: repo.Name, Message: "OpenSpec tasks remain incomplete"})
-			failed = true
-		}
-		for _, check := range repo.Checks {
-			timeout, _ := time.ParseDuration(check.Timeout)
-			res, e := s.Runner.Run(ctx, execx.CommandSpec{Executable: check.Executable, Args: check.Args, Dir: filepath.Join(t.Task.Root, repo.Worktree), Timeout: timeout})
-			if e != nil {
-				r.Fail(report.Diagnostic{Code: "CHECK_FAILED", Repo: repo.Name, Message: fmt.Sprintf("%s failed: %s", check.Name, res.Stderr)})
-				failed = true
-			}
+	if only != "" {
+		ordered, err = plan.DependencyClosure(t.Repositories, only)
+		if err != nil {
+			r.Fail(report.Diagnostic{Code: "UNKNOWN_REPOSITORY", Repo: only, Message: err.Error()})
+			return r, report.ExitConfig
 		}
 	}
-	if failed {
+	digest, err := configDigest(t)
+	if err != nil {
+		r.Fail(report.Diagnostic{Code: "CONFIG_DIGEST_FAILED", Message: err.Error()})
+		return r, report.ExitExecution
+	}
+	validation := domain.ValidationReport{SchemaVersion: 1, TaskID: t.Task.ID, ConfigDigest: digest, CompletedAt: time.Now().UTC(), OK: true, Repositories: map[string]domain.RepositoryValidation{}}
+	compatibilityFailure := false
+	for _, repository := range ordered {
+		validation.Scope = append(validation.Scope, repository.Name)
+		worktree := filepath.Join(t.Task.Root, repository.Worktree)
+		repositoryValidation := domain.RepositoryValidation{Name: repository.Name, Checks: []domain.CheckResult{}, OK: true, OpenSpec: domain.OpenSpecSummary{Configured: t.Execution.CreateOpenSpecChange, Change: repository.Change}}
+		info, inspectErr := s.Git.Inspect(ctx, worktree)
+		if inspectErr != nil {
+			r.Fail(report.Diagnostic{Code: "WORKTREE_INVALID", Repo: repository.Name, Message: inspectErr.Error()})
+			repositoryValidation.OK = false
+		} else {
+			repositoryValidation.Head = info.Head
+		}
+		if t.Execution.CreateOpenSpecChange {
+			if !s.OpenSpec.ChangeExists(worktree, repository.Change) {
+				r.Fail(report.Diagnostic{Code: "OPENSPEC_CHANGE_MISSING", Repo: repository.Name, Message: "configured OpenSpec change is missing"})
+				repositoryValidation.OK = false
+			} else {
+				summary, summaryErr := s.inspectOpenSpec(ctx, worktree, repository.Change, true)
+				repositoryValidation.OpenSpec = summary
+				if summaryErr != nil {
+					var compatibility openspec.CompatibilityError
+					if errors.As(summaryErr, &compatibility) {
+						compatibilityFailure = true
+						r.Fail(report.Diagnostic{Code: "OPENSPEC_INCOMPATIBLE", Repo: repository.Name, Message: summaryErr.Error()})
+					} else {
+						r.Fail(report.Diagnostic{Code: "OPENSPEC_STATUS_FAILED", Repo: repository.Name, Message: summaryErr.Error()})
+					}
+					repositoryValidation.OK = false
+				} else if !summary.Valid {
+					r.Fail(report.Diagnostic{Code: "OPENSPEC_INVALID", Repo: repository.Name, Message: "OpenSpec strict validation failed"})
+					repositoryValidation.OK = false
+				} else if !summary.Complete {
+					r.Fail(report.Diagnostic{Code: "OPENSPEC_TASKS_INCOMPLETE", Repo: repository.Name, Message: "OpenSpec tasks or planning artifacts remain incomplete"})
+					repositoryValidation.OK = false
+				}
+			}
+		} else {
+			repositoryValidation.OpenSpec.Valid, repositoryValidation.OpenSpec.Complete = true, true
+		}
+		for _, check := range repository.Checks {
+			timeout, _ := time.ParseDuration(check.Timeout)
+			commandResult, checkErr := s.Runner.Run(ctx, execx.CommandSpec{Executable: check.Executable, Args: check.Args, Dir: worktree, Timeout: timeout})
+			checkResult := domain.CheckResult{Name: check.Name, Executable: check.Executable, OK: checkErr == nil, ExitCode: commandResult.ExitCode, TimedOut: commandResult.TimedOut, Stderr: commandResult.Stderr}
+			repositoryValidation.Checks = append(repositoryValidation.Checks, checkResult)
+			if checkErr != nil {
+				code := "CHECK_FAILED"
+				if commandResult.TimedOut {
+					code = "CHECK_TIMEOUT"
+				}
+				r.Fail(report.Diagnostic{Code: code, Repo: repository.Name, Message: fmt.Sprintf("%s failed: %s", check.Name, commandResult.Stderr)})
+				repositoryValidation.OK = false
+			}
+		}
+		validation.Repositories[repository.Name] = repositoryValidation
+		validation.OK = validation.OK && repositoryValidation.OK
+	}
+	validation.CompletedAt = time.Now().UTC()
+	r.Data = validation
+	if err = persistValidationReport(t, validation); err != nil {
+		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_WRITE_FAILED", Message: err.Error()})
+		return r, report.ExitExecution
+	}
+	if compatibilityFailure {
+		return r, report.ExitToolCompatibility
+	}
+	if !validation.OK {
 		return r, report.ExitValidation
 	}
 	return r, report.ExitOK
 }
 func (s Service) Finish(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
 	r := report.New("finish", t.Task.ID)
-	status, _ := s.Status(ctx, t)
-	validation, _ := s.Validate(ctx, t)
-	r.Data = map[string]any{"status": status.Data, "validation": validation.Data, "archive": "manual review required", "cleanup": "not executed"}
+	statusResult, statusCode := s.Status(ctx, t)
+	status, ok := statusResult.Data.(domain.StatusData)
+	if !ok {
+		r.Fail(report.Diagnostic{Code: "STATUS_UNAVAILABLE", Message: "status data is unavailable"})
+		return r, statusCode
+	}
+	validation, validationErr := loadValidationReport(t)
+	ordered, _ := plan.Order(t.Repositories)
+	order := make([]string, 0, len(ordered))
+	for _, repository := range ordered {
+		order = append(order, repository.Name)
+	}
+	reverse := append([]string(nil), order...)
+	for left, right := 0, len(reverse)-1; left < right; left, right = left+1, right-1 {
+		reverse[left], reverse[right] = reverse[right], reverse[left]
+	}
+	data := domain.FinishData{Status: status, Validation: validation, ValidationOrder: order, MergeOrder: append([]string(nil), order...), ArchiveOrder: reverse, CleanupOrder: append([]string(nil), reverse...), Archive: "manual review required", Cleanup: "not executed"}
+	r.Data = data
 	r.Warnings = append(r.Warnings, report.Diagnostic{Code: "DRY_RUN_ONLY", Message: "finish only generates a report; no archive or cleanup was executed"})
-	r.Errors = append(r.Errors, validation.Errors...)
-	if statusData, ok := status.Data.(map[string]any); ok {
-		if repositories, ok := statusData["repositories"].([]any); ok {
-			for _, raw := range repositories {
-				entry, ok := raw.(map[string]any)
-				if !ok {
-					continue
-				}
-				if dirty, ok := entry["dirty"].(bool); ok && dirty {
-					repo, _ := entry["name"].(string)
-					r.Errors = append(r.Errors, report.Diagnostic{Code: "DIRTY_WORKTREE", Repo: repo, Message: "managed worktree has uncommitted changes"})
-				}
+	if validationErr != nil {
+		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_MISSING", Message: validationErr.Error()})
+	} else if !validation.OK {
+		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_FAILED", Message: "the latest validation report failed"})
+	}
+	digest, digestErr := configDigest(t)
+	if validation != nil && digestErr == nil && validation.ConfigDigest != digest {
+		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_STALE", Message: "configuration changed after validation"})
+	}
+	if validation != nil && !sameScope(validation.Scope, order) {
+		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_STALE", Message: "finish requires a full-task validation report"})
+	}
+	for _, repository := range status.Repositories {
+		if repository.Error != "" {
+			r.Fail(report.Diagnostic{Code: "REPOSITORY_STATUS_FAILED", Repo: repository.Name, Message: repository.Error})
+		}
+		if repository.Dirty {
+			r.Fail(report.Diagnostic{Code: "DIRTY_WORKTREE", Repo: repository.Name, Message: "managed worktree has uncommitted changes"})
+		}
+		if repository.OpenSpec.Configured && !repository.OpenSpec.Complete {
+			r.Fail(report.Diagnostic{Code: "OPENSPEC_TASKS_INCOMPLETE", Repo: repository.Name, Message: "OpenSpec tasks or planning artifacts remain incomplete"})
+		}
+		if validation != nil {
+			if repositoryValidation, found := validation.Repositories[repository.Name]; !found || repositoryValidation.Head != repository.Head {
+				r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_STALE", Repo: repository.Name, Message: "worktree HEAD changed after validation"})
 			}
 		}
+		if !repository.Pushed {
+			message := repository.Name + " branch is not fully pushed"
+			r.Warn(report.Diagnostic{Code: "BRANCH_NOT_PUSHED", Repo: repository.Name, Message: message})
+			data.CleanupBlockers = append(data.CleanupBlockers, message)
+		}
 	}
+	r.Data = data
 	r.OK = len(r.Errors) == 0
 	if !r.OK {
+		if statusCode == report.ExitToolCompatibility {
+			return r, report.ExitToolCompatibility
+		}
 		return r, report.ExitValidation
 	}
 	return r, report.ExitOK
+}
+
+func (s Service) inspectOpenSpec(ctx context.Context, worktree, change string, strict bool) (domain.OpenSpecSummary, error) {
+	summary := domain.OpenSpecSummary{Configured: true, Change: change, Present: s.OpenSpec.ChangeExists(worktree, change)}
+	if !summary.Present {
+		return summary, fmt.Errorf("configured OpenSpec change is missing")
+	}
+	status, err := s.OpenSpec.Status(ctx, worktree, change)
+	if err != nil {
+		return summary, err
+	}
+	summary.Schema = status.SchemaName
+	summary.Valid = true
+	complete, total, err := s.OpenSpec.TasksProgress(worktree, change)
+	if err != nil {
+		return summary, err
+	}
+	summary.TasksComplete, summary.TasksTotal = complete, total
+	summary.Complete = status.IsComplete && complete == total
+	if strict {
+		validation, validateErr := s.OpenSpec.Validate(ctx, worktree, change)
+		if validateErr != nil {
+			return summary, validateErr
+		}
+		summary.Valid = validation.Valid
+	}
+	return summary, nil
+}
+
+func configDigest(task domain.Task) (string, error) {
+	raw, err := config.Marshal(task)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", digest), nil
+}
+
+func validationReportPath(task domain.Task) string {
+	return filepath.Join(task.Task.Root, ".specflow", "reports", "validation.json")
+}
+func persistValidationReport(task domain.Task, validation domain.ValidationReport) error {
+	raw, err := json.MarshalIndent(validation, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fsx.AtomicWrite(validationReportPath(task), append(raw, '\n'), 0644)
+}
+func loadValidationReport(task domain.Task) (*domain.ValidationReport, error) {
+	raw, err := os.ReadFile(validationReportPath(task))
+	if err != nil {
+		return nil, err
+	}
+	var validation domain.ValidationReport
+	if err = json.Unmarshal(raw, &validation); err != nil {
+		return nil, err
+	}
+	if validation.SchemaVersion != 1 || validation.TaskID != task.Task.ID || validation.Repositories == nil {
+		return nil, fmt.Errorf("validation report is incompatible")
+	}
+	return &validation, nil
+}
+func sameScope(actual, expected []string) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	for index := range actual {
+		if actual[index] != expected[index] {
+			return false
+		}
+	}
+	return true
 }

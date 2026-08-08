@@ -3,16 +3,19 @@ package git
 import (
 	"context"
 	"fmt"
-	"github.com/chenquan/specflow/internal/execx"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/chenquan/specflow/internal/execx"
 )
 
 type Info struct {
-	Root, Remote, DefaultBranch string
-	Branch                      string
-	Dirty                       bool
+	Root, CommonDir, Remote, DefaultBranch string
+	Branch, Head, Upstream                 string
+	Dirty                                  bool
+	DirtyFiles, Ahead, Behind              int
 }
 type Worktree struct{ Path, Branch, Root string }
 type Client struct{ Runner execx.Runner }
@@ -23,9 +26,17 @@ func (c Client) Inspect(ctx context.Context, path string) (Info, error) {
 		return Info{}, fmt.Errorf("not a git worktree: %s", strings.TrimSpace(r.Stderr))
 	}
 	info := Info{Root: strings.TrimSpace(r.Stdout)}
+	common, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "rev-parse", "--git-common-dir"}})
+	if err == nil {
+		info.CommonDir = resolveGitPath(info.Root, strings.TrimSpace(common.Stdout))
+	}
 	s, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "status", "--porcelain"}})
 	if err == nil {
-		info.Dirty = strings.TrimSpace(s.Stdout) != ""
+		trimmed := strings.TrimSpace(s.Stdout)
+		info.Dirty = trimmed != ""
+		if trimmed != "" {
+			info.DirtyFiles = len(strings.Split(trimmed, "\n"))
+		}
 	}
 	remote, _ := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "remote", "get-url", "origin"}})
 	info.Remote = strings.TrimSpace(remote.Stdout)
@@ -33,7 +44,35 @@ func (c Client) Inspect(ctx context.Context, path string) (Info, error) {
 	info.DefaultBranch = strings.TrimPrefix(strings.TrimSpace(head.Stdout), "origin/")
 	branch, _ := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "branch", "--show-current"}})
 	info.Branch = strings.TrimSpace(branch.Stdout)
+	commit, _ := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "rev-parse", "HEAD"}})
+	info.Head = strings.TrimSpace(commit.Stdout)
+	upstream, upstreamErr := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"}})
+	if upstreamErr == nil {
+		info.Upstream = strings.TrimSpace(upstream.Stdout)
+		counts, countErr := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"}})
+		if countErr == nil {
+			fields := strings.Fields(counts.Stdout)
+			if len(fields) == 2 {
+				info.Ahead, _ = strconv.Atoi(fields[0])
+				info.Behind, _ = strconv.Atoi(fields[1])
+			}
+		}
+	}
 	return info, nil
+}
+
+func resolveGitPath(root, value string) string {
+	if value == "" {
+		return ""
+	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(root, value)
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return filepath.Clean(value)
+	}
+	return filepath.Clean(absolute)
 }
 func (c Client) RemoteExists(ctx context.Context, path, remote string) bool {
 	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "remote", "get-url", remote}})
