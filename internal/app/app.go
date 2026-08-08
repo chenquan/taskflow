@@ -73,14 +73,15 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 		}
 		repos = append(repos, domain.Repository{Name: parts[0], Source: source, Worktree: filepath.Join("worktrees", parts[0])})
 	}
-	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Title: o.TaskID, Root: taskRoot}, Primary: o.Primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex", "claude"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}, "claude": {Executable: "claude", LaunchMode: "direct", LoadAdditionalInstructions: true}}}}
-	if err = os.MkdirAll(taskRoot, 0755); err != nil {
-		res.Fail(report.Diagnostic{Code: "CREATE_TASK_FAILED", Message: err.Error()})
-		return res, report.ExitExecution
-	}
+	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Title: o.TaskID, Root: root}, Primary: o.Primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex", "claude"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}, "claude": {Executable: "claude", LaunchMode: "direct", LoadAdditionalInstructions: true}}}}
 	if err = config.Validate(&t); err != nil {
 		res.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
 		return res, report.ExitConfig
+	}
+	t.Task.Root = taskRoot
+	if err = os.MkdirAll(taskRoot, 0755); err != nil {
+		res.Fail(report.Diagnostic{Code: "CREATE_TASK_FAILED", Message: err.Error()})
+		return res, report.ExitExecution
 	}
 	l, err := lock.Acquire(taskRoot)
 	if err != nil {
@@ -417,8 +418,15 @@ func (s Service) Validate(ctx context.Context, t domain.Task) (report.Result, re
 		return r, report.ExitConfig
 	}
 	for _, repo := range ordered {
-		if !s.OpenSpec.ChangeExists(filepath.Join(t.Task.Root, repo.Worktree), repo.Change) {
+		worktree := filepath.Join(t.Task.Root, repo.Worktree)
+		if !s.OpenSpec.ChangeExists(worktree, repo.Change) {
 			r.Fail(report.Diagnostic{Code: "OPENSPEC_CHANGE_MISSING", Repo: repo.Name, Message: "configured OpenSpec change is missing"})
+			failed = true
+		} else if complete, err := s.OpenSpec.ChangeComplete(worktree, repo.Change); err != nil {
+			r.Fail(report.Diagnostic{Code: "OPENSPEC_TASKS_UNREADABLE", Repo: repo.Name, Message: err.Error()})
+			failed = true
+		} else if !complete {
+			r.Fail(report.Diagnostic{Code: "OPENSPEC_TASKS_INCOMPLETE", Repo: repo.Name, Message: "OpenSpec tasks remain incomplete"})
 			failed = true
 		}
 		for _, check := range repo.Checks {

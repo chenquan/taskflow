@@ -88,7 +88,8 @@ func Validate(t *domain.Task) error {
 		if err != nil || !info.IsDir() {
 			return fmt.Errorf("repository %s source is not a directory", r.Name)
 		}
-		if err := exec.Command("git", "-C", source, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
+		output, err := exec.Command("git", "-C", source, "rev-parse", "--is-inside-work-tree").Output()
+		if err != nil || strings.TrimSpace(string(output)) != "true" {
 			return fmt.Errorf("repository %s source is not a Git worktree", r.Name)
 		}
 		r.Source = source

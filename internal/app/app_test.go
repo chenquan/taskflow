@@ -71,6 +71,18 @@ func TestInitRejectsTraversalTaskID(t *testing.T) {
 		t.Fatalf("traversal wrote outside root: %v", err)
 	}
 }
+func TestInitRejectsUnknownPrimaryWithoutCreatingTaskDirectory(t *testing.T) {
+	root := t.TempDir()
+	repo := makeGitRepo(t)
+	s := New()
+	r, code := s.Init(context.Background(), InitOptions{TasksRoot: root, TaskID: "TASK-PRIMARY", Primary: "missing", Repositories: []string{"repo=" + repo}})
+	if code != report.ExitConfig || r.OK {
+		t.Fatalf("%d %#v", code, r)
+	}
+	if _, err := os.Stat(filepath.Join(root, "TASK-PRIMARY")); !os.IsNotExist(err) {
+		t.Fatalf("invalid init created task directory: %v", err)
+	}
+}
 func TestLoadRejectsTraversalTaskID(t *testing.T) {
 	_, err := New().Load(t.TempDir(), "../outside")
 	if err == nil {
@@ -209,6 +221,9 @@ func TestValidateOrdersRepositories(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(root, repo.Worktree, "openspec", "changes", repo.Change), 0755); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(root, repo.Worktree, "openspec", "changes", repo.Change, "tasks.md"), []byte("## Tasks\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	runner := &recordingRunner{}
 	s := Service{Runner: runner, Git: git.Client{Runner: runner}, OpenSpec: openspec.Client{Runner: runner}}
@@ -268,5 +283,26 @@ func TestFinishReturnsValidationFailureForMissingChange(t *testing.T) {
 	r, code := s.Finish(context.Background(), task)
 	if code != report.ExitValidation || r.OK {
 		t.Fatalf("%d %#v", code, r)
+	}
+}
+func TestValidateAndFinishBlockIncompleteOpenSpecTasks(t *testing.T) {
+	root := t.TempDir()
+	worktree := filepath.Join(root, "worktrees", "repo")
+	change := "task-repo"
+	if err := os.MkdirAll(filepath.Join(worktree, "openspec", "changes", change), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "openspec", "changes", change, "tasks.md"), []byte("## Tasks\n\n- [ ] unfinished\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	task := domain.Task{Task: domain.TaskInfo{ID: "TASK", Root: root}, Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo", Change: change}}}
+	s := New()
+	validation, code := s.Validate(context.Background(), task)
+	if code != report.ExitValidation || validation.OK || validation.Errors[0].Code != "OPENSPEC_TASKS_INCOMPLETE" {
+		t.Fatalf("validation: %d %#v", code, validation)
+	}
+	finish, code := s.Finish(context.Background(), task)
+	if code != report.ExitValidation || finish.OK || finish.Errors[0].Code != "OPENSPEC_TASKS_INCOMPLETE" {
+		t.Fatalf("finish: %d %#v", code, finish)
 	}
 }

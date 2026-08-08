@@ -1,6 +1,7 @@
 package openspec
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -15,6 +16,14 @@ func (c Client) Available() bool { _, err := c.Runner.LookPath("openspec"); retu
 func (c Client) ChangeExists(worktree, change string) bool {
 	_, err := os.Stat(filepath.Join(worktree, "openspec", "changes", change))
 	return err == nil
+}
+func (c Client) ChangeComplete(worktree, change string) (bool, error) {
+	tasksPath := filepath.Join(worktree, "openspec", "changes", change, "tasks.md")
+	tasks, err := os.ReadFile(tasksPath)
+	if err != nil {
+		return false, fmt.Errorf("read OpenSpec tasks: %w", err)
+	}
+	return !bytes.Contains(tasks, []byte("- [ ]")), nil
 }
 func (c Client) CreateChange(ctx context.Context, worktree, change string) error {
 	r, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "openspec", Args: []string{"new", "change", change, "--json"}, Dir: worktree})

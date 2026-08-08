@@ -42,6 +42,18 @@ func TestValidateRejectsNonGitSource(t *testing.T) {
 		t.Fatal("expected non-git source rejection")
 	}
 }
+func TestValidateRejectsBareGitSource(t *testing.T) {
+	root := t.TempDir()
+	bare := filepath.Join(t.TempDir(), "source.git")
+	if out, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v: %s", err, out)
+	}
+	v := task(root)
+	v.Repositories[0].Source = bare
+	if Validate(&v) == nil {
+		t.Fatal("expected bare Git source rejection")
+	}
+}
 func TestValidateRejectsInvalidCheckAndChange(t *testing.T) {
 	d := t.TempDir()
 	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
