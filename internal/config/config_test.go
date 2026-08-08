@@ -1,0 +1,60 @@
+package config
+
+import (
+	"github.com/chenquan/specflow/internal/domain"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+func task(root string) domain.Task {
+	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}}
+}
+func TestValidateDefaults(t *testing.T) {
+	d := t.TempDir()
+	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	v := task(d)
+	if err := Validate(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Repositories[0].Worktree != filepath.Join("worktrees", "one") {
+		t.Fatal(v.Repositories[0].Worktree)
+	}
+}
+func TestValidateCycle(t *testing.T) {
+	d := t.TempDir()
+	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	v := task(d)
+	v.Repositories = append(v.Repositories, domain.Repository{Name: "two", Source: d, DependsOn: []string{"one"}})
+	v.Repositories[0].DependsOn = []string{"two"}
+	if Validate(&v) == nil {
+		t.Fatal("expected cycle")
+	}
+}
+func TestValidateRejectsNonGitSource(t *testing.T) {
+	d := t.TempDir()
+	v := task(d)
+	if Validate(&v) == nil {
+		t.Fatal("expected non-git source rejection")
+	}
+}
+func TestValidateRejectsInvalidCheckAndChange(t *testing.T) {
+	d := t.TempDir()
+	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	v := task(d)
+	v.Repositories[0].Change = "My_Change"
+	if Validate(&v) == nil {
+		t.Fatal("expected invalid change")
+	}
+	v = task(d)
+	v.Repositories[0].Checks = []domain.Check{{Name: "check", Executable: "echo", Timeout: "soon"}}
+	if Validate(&v) == nil {
+		t.Fatal("expected invalid timeout")
+	}
+}

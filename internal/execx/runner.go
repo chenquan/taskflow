@@ -1,0 +1,60 @@
+package execx
+
+import (
+	"context"
+	"io"
+	"os"
+	"os/exec"
+	"time"
+)
+
+type CommandSpec struct {
+	Executable string
+	Args       []string
+	Dir        string
+	Timeout    time.Duration
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
+	Env        []string
+}
+type Result struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+type Runner interface {
+	Run(context.Context, CommandSpec) (Result, error)
+	LookPath(string) (string, error)
+}
+type OSRunner struct{}
+
+func (OSRunner) LookPath(name string) (string, error) { return exec.LookPath(name) }
+func (OSRunner) Run(ctx context.Context, s CommandSpec) (Result, error) {
+	if s.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.Timeout)
+		defer cancel()
+	}
+	c := exec.CommandContext(ctx, s.Executable, s.Args...)
+	c.Dir = s.Dir
+	c.Stdin, c.Stdout, c.Stderr = s.Stdin, s.Stdout, s.Stderr
+	if len(s.Env) > 0 {
+		c.Env = append(os.Environ(), s.Env...)
+	}
+	if s.Stdin != nil || s.Stdout != nil || s.Stderr != nil {
+		err := c.Run()
+		r := Result{}
+		if ee, ok := err.(*exec.ExitError); ok {
+			r.ExitCode = ee.ExitCode()
+		}
+		return r, err
+	}
+	out, err := c.Output()
+	r := Result{Stdout: string(out)}
+	if ee, ok := err.(*exec.ExitError); ok {
+		r.Stderr = string(ee.Stderr)
+		r.ExitCode = ee.ExitCode()
+	}
+	return r, err
+}
