@@ -1,6 +1,6 @@
 module github.com/chenquan/specflow
 
-go 1.23
+go 1.25
 
 require (
 	github.com/gofrs/flock v0.12.1
