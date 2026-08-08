@@ -24,7 +24,7 @@ func NewRootCommand() *cobra.Command {
 	var tasksRoot string
 	var asJSON bool
 	svc := app.New()
-	root := &cobra.Command{Use: "specflow", Short: "Safely coordinate local multi-repository OpenSpec work", SilenceUsage: true}
+	root := &cobra.Command{Use: "specflow", Short: "Safely coordinate local multi-repository Git work", SilenceUsage: true}
 	root.PersistentFlags().StringVar(&tasksRoot, "tasks-root", "", "task workspace root")
 	root.PersistentFlags().BoolVar(&asJSON, "json", false, "emit JSON")
 	render := func(c *cobra.Command, r report.Result, code report.ExitCode) error {
@@ -66,7 +66,7 @@ func NewRootCommand() *cobra.Command {
 		return render(c, r, code)
 	}}
 	start.Flags().BoolVar(&dryRun, "dry-run", false, "show the execution plan without changing state")
-	start.Flags().BoolVar(&execute, "execute", false, "execute the planned worktree and OpenSpec actions")
+	start.Flags().BoolVar(&execute, "execute", false, "execute the planned worktree actions")
 	root.AddCommand(start)
 	var tool string
 	openCmd := &cobra.Command{Use: "open <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {

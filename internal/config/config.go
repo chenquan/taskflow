@@ -16,7 +16,6 @@ import (
 )
 
 var repoName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-var changeID = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 func ValidateTaskID(taskID string) error {
 	if taskID == "" || taskID == "." || taskID == ".." || filepath.IsAbs(taskID) || filepath.Base(taskID) != taskID || strings.ContainsAny(taskID, `/\\`) {
@@ -31,7 +30,8 @@ func Load(path string) (domain.Task, error) {
 	if err != nil {
 		return domain.Task{}, err
 	}
-	if err = requireChangeCreationIntent(b); err != nil {
+	b, err = stripLegacyOpenSpecField(b)
+	if err != nil {
 		return domain.Task{}, fmt.Errorf("decode %s: %w", path, err)
 	}
 	var t domain.Task
@@ -47,13 +47,13 @@ func Load(path string) (domain.Task, error) {
 }
 func Marshal(t domain.Task) ([]byte, error) { return yaml.Marshal(t) }
 
-func requireChangeCreationIntent(raw []byte) error {
+func stripLegacyOpenSpecField(raw []byte) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return err
+		return nil, err
 	}
 	if len(doc.Content) == 0 || len(doc.Content[0].Content)%2 != 0 {
-		return fmt.Errorf("configuration must be a mapping")
+		return nil, fmt.Errorf("configuration must be a mapping")
 	}
 	root := doc.Content[0]
 	for i := 0; i < len(root.Content); i += 2 {
@@ -61,14 +61,19 @@ func requireChangeCreationIntent(raw []byte) error {
 			continue
 		}
 		execution := root.Content[i+1]
+		if execution.Kind != yaml.MappingNode {
+			break
+		}
+		fields := make([]*yaml.Node, 0, len(execution.Content))
 		for j := 0; j+1 < len(execution.Content); j += 2 {
-			if execution.Content[j].Value == "create_openspec_change" {
-				return nil
+			if execution.Content[j].Value != "create_openspec_change" {
+				fields = append(fields, execution.Content[j], execution.Content[j+1])
 			}
 		}
-		return fmt.Errorf("execution.create_openspec_change is required")
+		execution.Content = fields
+		break
 	}
-	return fmt.Errorf("execution.create_openspec_change is required")
+	return yaml.Marshal(&doc)
 }
 
 func Validate(t *domain.Task) error {
@@ -141,12 +146,6 @@ func Validate(t *domain.Task) error {
 		if r.Branch == "" {
 			r.Branch = "feature/" + strings.ToLower(t.Task.ID)
 		}
-		if r.Change == "" {
-			r.Change = ChangeID(t.Task.ID, r.Name)
-		}
-		if !changeID.MatchString(r.Change) {
-			return fmt.Errorf("repository %s has invalid change ID %q", r.Name, r.Change)
-		}
 		for _, c := range r.Checks {
 			if c.Name == "" || c.Executable == "" {
 				return fmt.Errorf("repository %s has invalid check", r.Name)
@@ -205,11 +204,6 @@ func validateDevelopment(development domain.Development) error {
 		return fmt.Errorf("development.default_tool %q is not enabled", development.DefaultTool)
 	}
 	return nil
-}
-func ChangeID(taskID, name string) string {
-	s := strings.ToLower(taskID + "-" + name)
-	s = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(s, "-")
-	return strings.Trim(s, "-")
 }
 func checkAcyclic(repos []domain.Repository) error {
 	by := map[string]domain.Repository{}

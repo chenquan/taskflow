@@ -3,7 +3,6 @@ package git
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -99,11 +98,6 @@ func (c Client) HasRef(ctx context.Context, path, ref string) bool {
 	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "rev-parse", "--verify", "--quiet", ref + "^{commit}"}})
 	return err == nil
 }
-func IsOpenSpec(path string) bool {
-	s, e := os.Stat(filepath.Join(path, "openspec"))
-	return e == nil && s.IsDir()
-}
-
 func (c Client) Worktrees(ctx context.Context, path string) ([]Worktree, error) {
 	r, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "worktree", "list", "--porcelain"}})
 	if err != nil {

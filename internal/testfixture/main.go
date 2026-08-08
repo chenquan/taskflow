@@ -14,8 +14,6 @@ func main() {
 	args := os.Args[1:]
 	var code int
 	switch name {
-	case "openspec":
-		code = runOpenSpec(args)
 	case "codex", "claude":
 		code = runTool(name, args)
 	case "specflow-e2e-check":
@@ -25,54 +23,6 @@ func main() {
 		code = 2
 	}
 	os.Exit(code)
-}
-
-func runOpenSpec(args []string) int {
-	if equalArgs(args, "--version") {
-		if version := os.Getenv("SPECFLOW_E2E_OPENSPEC_VERSION"); version != "" {
-			fmt.Println(version)
-			return 0
-		}
-		fmt.Println("OpenSpec 1.4.1")
-		return 0
-	}
-	if len(args) >= 3 && args[0] == "status" && args[1] == "--change" {
-		change := args[2]
-		if configured := os.Getenv("SPECFLOW_E2E_OPENSPEC_STATUS_CHANGE"); configured != "" {
-			change = configured
-		}
-		fmt.Printf("{\"changeName\":%q,\"schemaName\":\"spec-driven\",\"isComplete\":true,\"artifacts\":[{\"id\":\"tasks\",\"status\":\"done\"}]}\n", change)
-		return 0
-	}
-	if len(args) >= 2 && args[0] == "validate" {
-		fmt.Printf("{\"items\":[{\"id\":%q,\"type\":\"change\",\"valid\":true,\"issues\":[]}],\"version\":\"1.0\"}\n", args[1])
-		return 0
-	}
-	if len(args) >= 3 && args[0] == "new" && args[1] == "change" {
-		if err := appendLine(os.Getenv("SPECFLOW_E2E_OPENSPEC_LOG"), strings.Join(args, " ")); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		if consume(os.Getenv("SPECFLOW_E2E_OPENSPEC_FAIL_ONCE")) {
-			fmt.Fprintln(os.Stderr, "forced OpenSpec failure")
-			return 17
-		}
-		if exists(os.Getenv("SPECFLOW_E2E_OPENSPEC_BLOCK")) && !waitForRelease(os.Getenv("SPECFLOW_E2E_OPENSPEC_READY"), os.Getenv("SPECFLOW_E2E_OPENSPEC_RELEASE")) {
-			return 98
-		}
-		changeRoot := filepath.Join("openspec", "changes", args[2])
-		if err := os.MkdirAll(changeRoot, 0755); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		if err := os.WriteFile(filepath.Join(changeRoot, "tasks.md"), []byte("# Tasks\n\n- [ ] Complete the change\n"), 0644); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		fmt.Println(`{"ok":true}`)
-		return 0
-	}
-	return 1
 }
 
 func runTool(name string, args []string) int {

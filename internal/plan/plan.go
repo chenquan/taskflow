@@ -67,9 +67,6 @@ func Build(task domain.Task) ([]Item, error) {
 			items = append(items, Item{ID: "fetch-" + r.Name, Repo: r.Name, Kind: "fetch", Description: fmt.Sprintf("FETCH %s", r.Name)})
 		}
 		items = append(items, Item{ID: "worktree-" + r.Name, Repo: r.Name, Kind: "worktree", Description: fmt.Sprintf("ADD WORKTREE %s -> %s", r.Name, r.Worktree)})
-		if task.Execution.CreateOpenSpecChange {
-			items = append(items, Item{ID: "openspec-" + r.Name, Repo: r.Name, Kind: "openspec", Description: fmt.Sprintf("CREATE CHANGE %s in %s", r.Change, r.Worktree)})
-		}
 	}
 	return items, nil
 }

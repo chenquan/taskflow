@@ -13,14 +13,14 @@ func TestOrderDeterministic(t *testing.T) {
 	}
 }
 func TestBuildIncludesConfiguredFetch(t *testing.T) {
-	items, e := Build(domain.Task{Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a", Change: "a"}}, Execution: domain.Execution{Fetch: true, CreateOpenSpecChange: true}})
-	if e != nil || len(items) != 4 || items[0].Kind != "directory" || items[1].Kind != "fetch" || items[3].Kind != "openspec" {
+	items, e := Build(domain.Task{Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a"}}, Execution: domain.Execution{Fetch: true}})
+	if e != nil || len(items) != 3 || items[0].Kind != "directory" || items[1].Kind != "fetch" || items[2].Kind != "worktree" {
 		t.Fatalf("%v %#v", e, items)
 	}
 }
 
-func TestBuildSkipsOpenSpecWhenDisabled(t *testing.T) {
-	items, err := Build(domain.Task{Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a", Change: "a"}}})
+func TestBuildWithoutFetch(t *testing.T) {
+	items, err := Build(domain.Task{Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a"}}})
 	if err != nil || len(items) != 2 || items[0].Kind != "directory" || items[1].Kind != "worktree" {
 		t.Fatalf("%v %#v", err, items)
 	}

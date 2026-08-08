@@ -26,7 +26,6 @@ type Repository struct {
 	Base          string   `yaml:"base" json:"base"`
 	Branch        string   `yaml:"branch" json:"branch"`
 	Worktree      string   `yaml:"worktree" json:"worktree"`
-	Change        string   `yaml:"change" json:"change"`
 	Role          string   `yaml:"role" json:"role"`
 	ContractOwner bool     `yaml:"contract_owner" json:"contractOwner"`
 	DependsOn     []string `yaml:"depends_on" json:"dependsOn"`
@@ -51,8 +50,7 @@ type ToolDef struct {
 	LoadAdditionalInstructions bool   `yaml:"load_additional_instructions" json:"loadAdditionalInstructions"`
 }
 type Execution struct {
-	Fetch                bool `yaml:"fetch" json:"fetch"`
-	CreateOpenSpecChange bool `yaml:"create_openspec_change" json:"createOpenSpecChange"`
+	Fetch bool `yaml:"fetch" json:"fetch"`
 }
 
 type Inventory struct {
@@ -65,7 +63,6 @@ type RepositoryFacts struct {
 	Root          string `json:"root"`
 	Remote        string `json:"remote,omitempty"`
 	DefaultBranch string `json:"defaultBranch,omitempty"`
-	OpenSpec      bool   `json:"openSpec"`
 }
 type State struct {
 	SchemaVersion int                        `json:"schemaVersion"`
@@ -77,7 +74,6 @@ type State struct {
 }
 type RepositoryState struct {
 	Worktree string                   `json:"worktree"`
-	Change   string                   `json:"change,omitempty"`
 	Actions  map[string]ActionOutcome `json:"actions,omitempty"`
 	Error    string                   `json:"error,omitempty"`
 }
@@ -95,17 +91,6 @@ type ActionOutcome struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-type OpenSpecSummary struct {
-	Configured    bool   `json:"configured"`
-	Change        string `json:"change,omitempty"`
-	Present       bool   `json:"present"`
-	Valid         bool   `json:"valid"`
-	Complete      bool   `json:"complete"`
-	TasksTotal    int    `json:"tasksTotal"`
-	TasksComplete int    `json:"tasksComplete"`
-	Schema        string `json:"schema,omitempty"`
-}
-
 type CheckResult struct {
 	Name       string `json:"name"`
 	Executable string `json:"executable"`
@@ -116,11 +101,10 @@ type CheckResult struct {
 }
 
 type RepositoryValidation struct {
-	Name     string          `json:"name"`
-	Head     string          `json:"head"`
-	OpenSpec OpenSpecSummary `json:"openSpec"`
-	Checks   []CheckResult   `json:"checks"`
-	OK       bool            `json:"ok"`
+	Name   string        `json:"name"`
+	Head   string        `json:"head"`
+	Checks []CheckResult `json:"checks"`
+	OK     bool          `json:"ok"`
 }
 
 type ValidationReport struct {
@@ -134,20 +118,19 @@ type ValidationReport struct {
 }
 
 type RepositoryStatus struct {
-	Name             string          `json:"name"`
-	Worktree         string          `json:"worktree"`
-	Branch           string          `json:"branch,omitempty"`
-	Head             string          `json:"head,omitempty"`
-	Dirty            bool            `json:"dirty"`
-	DirtyFiles       int             `json:"dirtyFiles"`
-	Upstream         string          `json:"upstream,omitempty"`
-	Ahead            int             `json:"ahead"`
-	Behind           int             `json:"behind"`
-	Pushed           bool            `json:"pushed"`
-	DependencyReady  bool            `json:"dependencyReady"`
-	OpenSpec         OpenSpecSummary `json:"openSpec"`
-	LastValidationOK *bool           `json:"lastValidationOK,omitempty"`
-	Error            string          `json:"error,omitempty"`
+	Name             string `json:"name"`
+	Worktree         string `json:"worktree"`
+	Branch           string `json:"branch,omitempty"`
+	Head             string `json:"head,omitempty"`
+	Dirty            bool   `json:"dirty"`
+	DirtyFiles       int    `json:"dirtyFiles"`
+	Upstream         string `json:"upstream,omitempty"`
+	Ahead            int    `json:"ahead"`
+	Behind           int    `json:"behind"`
+	Pushed           bool   `json:"pushed"`
+	DependencyReady  bool   `json:"dependencyReady"`
+	LastValidationOK *bool  `json:"lastValidationOK,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 type StatusData struct {

@@ -20,17 +20,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install pinned OpenSpec
-        run: npm install --global @fission-ai/openspec@1.4.1
       - name: Test
         run: go test ./...
       - name: Vet
         run: go vet ./...
-      - name: Validate OpenSpec
-        run: openspec validate --all --strict --no-interactive
 
   race:
     strategy:
@@ -55,11 +48,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install pinned OpenSpec
-        run: npm install --global @fission-ai/openspec@1.4.1
       - name: Enforce combined production coverage
         run: |
           go test -coverpkg=./... -coverprofile=coverage.out ./...

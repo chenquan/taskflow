@@ -10,10 +10,10 @@ import (
 )
 
 func task(root string) domain.Task {
-	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}}}, Execution: domain.Execution{CreateOpenSpecChange: true}}
+	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}}}}
 }
 
-func TestLoadRequiresExplicitSupportedExecutionPolicy(t *testing.T) {
+func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T) {
 	d := t.TempDir()
 	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
@@ -24,19 +24,24 @@ func TestLoadRequiresExplicitSupportedExecutionPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "specflow.yaml")
-	missing := strings.Replace(string(raw), "    create_openspec_change: true\n", "", 1)
-	if err := os.WriteFile(path, []byte(missing), 0644); err != nil {
+	legacy := strings.Replace(string(raw), "execution: {}", "execution:\n    create_openspec_change: true", 1)
+	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "create_openspec_change is required") {
-		t.Fatalf("expected required execution intent, got %v", err)
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected legacy configuration compatibility, got %v", err)
 	}
-	stale := strings.Replace(string(raw), "    create_openspec_change: true\n", "    create_openspec_change: true\n    cleanup: false\n", 1)
+	normalized, err := Marshal(loaded)
+	if err != nil || strings.Contains(string(normalized), "create_openspec_change") {
+		t.Fatalf("legacy field survived normalized output: %s (%v)", normalized, err)
+	}
+	stale := legacy + "\nunknown_field: true\n"
 	if err := os.WriteFile(path, []byte(stale), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "cleanup") {
-		t.Fatalf("expected removed field rejection, got %v", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown_field") {
+		t.Fatalf("expected unknown field rejection, got %v", err)
 	}
 }
 
@@ -102,17 +107,12 @@ func TestValidateAllowsBareGitSourceStructurally(t *testing.T) {
 		t.Fatalf("structural validation unexpectedly inspected Git: %v", err)
 	}
 }
-func TestValidateRejectsInvalidCheckAndChange(t *testing.T) {
+func TestValidateRejectsInvalidCheck(t *testing.T) {
 	d := t.TempDir()
 	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	v := task(d)
-	v.Repositories[0].Change = "My_Change"
-	if Validate(&v) == nil {
-		t.Fatal("expected invalid change")
-	}
-	v = task(d)
 	v.Repositories[0].Checks = []domain.Check{{Name: "check", Executable: "echo", Timeout: "soon"}}
 	if Validate(&v) == nil {
 		t.Fatal("expected invalid timeout")
