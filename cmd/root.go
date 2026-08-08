@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/chenquan/specflow/internal/app"
 	"github.com/chenquan/specflow/internal/report"
+	"github.com/chenquan/specflow/skills"
 	"github.com/spf13/cobra"
 )
 
@@ -157,7 +159,60 @@ func NewRootCommand() *cobra.Command {
 	}}
 	doctor.Flags().StringVar(&repo, "repo", "", "only diagnose this repository")
 	root.AddCommand(doctor)
+	var projectSkills, forceSkills bool
+	skillCmd := &cobra.Command{Use: "skill", Short: "Install built-in agent skills"}
+	installSkills := &cobra.Command{Use: "install", Args: cobra.NoArgs, RunE: func(c *cobra.Command, args []string) error {
+		targets, err := skillTargets(projectSkills)
+		r := report.New("skill install", "")
+		if err != nil {
+			r.Fail(report.Diagnostic{Code: "SKILL_TARGET_INVALID", Message: err.Error()})
+			return render(c, r, report.ExitConfig)
+		}
+		installed, err := skills.Install(targets, forceSkills)
+		if err != nil {
+			r.Fail(report.Diagnostic{Code: "SKILL_INSTALL_FAILED", Message: err.Error()})
+			return render(c, r, report.ExitExecution)
+		}
+		r.Data = map[string]any{"scope": skillScope(projectSkills), "targets": installed}
+		return render(c, r, report.ExitOK)
+	}}
+	installSkills.Flags().BoolVar(&projectSkills, "project", false, "install into the current project's .codex and .claude directories")
+	installSkills.Flags().BoolVar(&forceSkills, "force", false, "replace existing skills installed under the same names")
+	skillCmd.AddCommand(installSkills)
+	root.AddCommand(skillCmd)
 	return root
+}
+
+func skillTargets(project bool) ([]skills.Target, error) {
+	if project {
+		root, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		return []skills.Target{
+			{Tool: "codex", Root: filepath.Join(root, ".codex", "skills")},
+			{Tool: "claude", Root: filepath.Join(root, ".claude", "skills")},
+		}, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	codexHome := os.Getenv("CODEX_HOME")
+	if codexHome == "" {
+		codexHome = filepath.Join(home, ".codex")
+	}
+	return []skills.Target{
+		{Tool: "codex", Root: filepath.Join(codexHome, "skills")},
+		{Tool: "claude", Root: filepath.Join(home, ".claude", "skills")},
+	}, nil
+}
+
+func skillScope(project bool) string {
+	if project {
+		return "project"
+	}
+	return "global"
 }
 
 type exitError struct{ code int }

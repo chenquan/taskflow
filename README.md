@@ -21,6 +21,22 @@ Specflow 不会自动提交代码、推送分支、创建 PR、合并分支或�
 - Git
 - 可选：Codex CLI 或 Claude Code
 
+## 安装操作 Skill
+
+Specflow 内置了用于操作任务工作区的 `specflow` skill。安装到当前用户的 Codex 与 Claude Code：
+
+```bash
+specflow skill install
+```
+
+安装到当前项目（`./.codex/skills` 与 `./.claude/skills`）：
+
+```bash
+specflow skill install --project
+```
+
+默认不会覆盖同名 skill；确认需要替换时加 `--force`。
+
 ## 安装
 
 ```bash
