@@ -193,6 +193,15 @@ func safetyLog(t *testing.T, path string) []string {
 	return strings.Split(strings.TrimSpace(string(b)), "\n")
 }
 
+func worktreeHead(t *testing.T, path string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", path, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse %s: %v", path, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func TestE2EMultiRepositoryLifecycleAndReadiness(t *testing.T) {
 	f := newSafetyFixture(t)
 	owner := makeSafetyRepo(t, filepath.Join(f.root, "仓库 owner"))
@@ -480,6 +489,134 @@ func TestE2ECommandArgumentGuards(t *testing.T) {
 		if e2eCode(err) != int(report.ExitConfig) || !strings.Contains(out, "INVALID_") {
 			t.Fatalf("argument guard %v: %d %s", args, e2eCode(err), out)
 		}
+	}
+}
+
+func TestE2EAppendRepositoryAfterStart(t *testing.T) {
+	f := newSafetyFixture(t)
+	second := makeSafetyRepo(t, filepath.Join(f.root, "second"))
+	if out, err := runSafetyCobra(t, f.tasks, "init", "append", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+		t.Fatalf("init: %v: %s", err, out)
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "start", "append", "--execute"); err != nil {
+		t.Fatalf("start: %v: %s", err, out)
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "validate", "append"); err != nil {
+		t.Fatalf("validate: %v: %s", err, out)
+	}
+	firstWorktree := filepath.Join(f.tasks, "append", "worktrees", "repo")
+	secondWorktree := filepath.Join(f.tasks, "append", "worktrees", "second")
+	firstHead := worktreeHead(t, firstWorktree)
+
+	beforeFiles := safetyFiles(t, filepath.Join(f.tasks, "append"))
+	beforeState := safetyState(t, f.tasks, "append")
+	dryOut, err := runSafetyCobra(t, f.tasks, "--json", "repo", "add", "append", "--repo", "second="+second, "--depends-on", "repo", "--dry-run")
+	if err != nil {
+		t.Fatalf("repo add dry-run: %v: %s", err, dryOut)
+	}
+	var dryData struct {
+		DryRun bool `json:"dryRun"`
+		Added  struct {
+			Name string `json:"name"`
+		} `json:"added"`
+		Actions []struct {
+			Repo string `json:"repo"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal(decodeSafety(t, dryOut).Data, &dryData); err != nil {
+		t.Fatal(err)
+	}
+	if !dryData.DryRun || dryData.Added.Name != "second" || len(dryData.Actions) != 1 || dryData.Actions[0].Repo != "second" {
+		t.Fatalf("repo add dry-run data: %#v", dryData)
+	}
+	if !reflect.DeepEqual(beforeFiles, safetyFiles(t, filepath.Join(f.tasks, "append"))) || !bytes.Equal(beforeState, safetyState(t, f.tasks, "append")) {
+		t.Fatal("repo add dry-run mutated the task")
+	}
+
+	if out, err := runSafetyCobra(t, f.tasks, "repo", "add", "append", "--repo", "second="+second, "--depends-on", "repo"); err != nil {
+		t.Fatalf("repo add: %v: %s", err, out)
+	}
+	if _, err := os.Stat(secondWorktree); !os.IsNotExist(err) {
+		t.Fatalf("repo add created a worktree: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.tasks, "append", "worktrees")); len(entries) != 1 {
+		t.Fatalf("expected only the existing worktree, got %v", entries)
+	}
+
+	statusOut, _ := runSafetyCobra(t, f.tasks, "--json", "status", "append")
+	var statusData struct {
+		ValidationStale bool `json:"validationStale"`
+	}
+	if err := json.Unmarshal(decodeSafety(t, statusOut).Data, &statusData); err != nil {
+		t.Fatal(err)
+	}
+	if !statusData.ValidationStale {
+		t.Fatal("expected stale validation after append")
+	}
+
+	startDryState := safetyState(t, f.tasks, "append")
+	if out, err := runSafetyCobra(t, f.tasks, "start", "append", "--dry-run"); err != nil {
+		t.Fatalf("start dry-run: %v: %s", err, out)
+	}
+	if !bytes.Equal(startDryState, safetyState(t, f.tasks, "append")) {
+		t.Fatal("start dry-run mutated state")
+	}
+
+	if out, err := runSafetyCobra(t, f.tasks, "start", "append", "--execute"); err != nil {
+		t.Fatalf("start execute: %v: %s", err, out)
+	}
+	if _, err := os.Stat(secondWorktree); err != nil {
+		t.Fatalf("second worktree missing: %v", err)
+	}
+	if worktreeHead(t, firstWorktree) != firstHead {
+		t.Fatal("existing worktree was recreated instead of reused")
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "start", "append", "--execute"); err != nil {
+		t.Fatalf("repeat start: %v: %s", err, out)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.tasks, "append", "worktrees")); len(entries) != 2 {
+		t.Fatalf("expected two worktrees after repeat start, got %v", entries)
+	}
+
+	if out, err := runSafetyCobra(t, f.tasks, "validate", "append"); err != nil {
+		t.Fatalf("validate after append: %v: %s", err, out)
+	}
+	refreshOut, _ := runSafetyCobra(t, f.tasks, "--json", "status", "append")
+	if err := json.Unmarshal(decodeSafety(t, refreshOut).Data, &statusData); err != nil {
+		t.Fatal(err)
+	}
+	if statusData.ValidationStale {
+		t.Fatal("expected refreshed validation after validate")
+	}
+}
+
+func TestE2EAppendRepositoryLockConflict(t *testing.T) {
+	f := newSafetyFixture(t)
+	second := makeSafetyRepo(t, filepath.Join(f.root, "second"))
+	if out, err := runSafetyCobra(t, f.tasks, "init", "locked-append", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+		t.Fatalf("init: %v: %s", err, out)
+	}
+	task, err := config.Load(config.Path(f.tasks, "locked-append"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder, err := lock.Acquire(task.Task.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Release()
+	beforeConfig, _ := os.ReadFile(filepath.Join(f.tasks, "locked-append", "taskflow.yaml"))
+	beforeState := safetyState(t, f.tasks, "locked-append")
+	out, err := runSafetyCobra(t, f.tasks, "--json", "repo", "add", "locked-append", "--repo", "second="+second)
+	result := decodeSafety(t, out)
+	if e2eCode(err) != int(report.ExitConflict) || len(result.Errors) != 1 || result.Errors[0].Code != "TASK_LOCKED" {
+		t.Fatalf("lock conflict: %d %#v", e2eCode(err), result)
+	}
+	if afterConfig, _ := os.ReadFile(filepath.Join(f.tasks, "locked-append", "taskflow.yaml")); !bytes.Equal(beforeConfig, afterConfig) {
+		t.Fatal("configuration changed under lock conflict")
+	}
+	if !bytes.Equal(beforeState, safetyState(t, f.tasks, "locked-append")) {
+		t.Fatal("state changed under lock conflict")
 	}
 }
 

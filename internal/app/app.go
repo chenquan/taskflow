@@ -160,6 +160,160 @@ func (s Service) Load(tasksRoot, taskID string) (domain.Task, error) {
 	return config.Load(config.Path(tasksRoot, taskID))
 }
 
+type RepoAddOptions struct {
+	Repository string
+	DependsOn  []string
+	DryRun     bool
+}
+
+type repoAddPlan struct {
+	repository domain.Repository
+	merged     domain.Task
+	inventory  domain.Inventory
+	state      domain.State
+	digest     string
+	actions    []plan.Item
+}
+
+func (s Service) RepoAdd(ctx context.Context, t domain.Task, o RepoAddOptions) (report.Result, report.ExitCode) {
+	res := report.New("repo add", t.Task.ID)
+	if o.DryRun {
+		prepared, diagnostic, code := s.prepareRepoAdd(ctx, t, o)
+		if diagnostic != nil {
+			res.Fail(*diagnostic)
+			return res, code
+		}
+		res.Data = map[string]any{"dryRun": true, "added": prepared.repository, "actions": prepared.actions}
+		return res, report.ExitOK
+	}
+	l, err := lock.Acquire(t.Task.Root)
+	if err != nil {
+		res.Fail(report.Diagnostic{Code: "TASK_LOCKED", Message: err.Error()})
+		return res, report.ExitConflict
+	}
+	defer l.Release()
+	prepared, diagnostic, code := s.prepareRepoAdd(ctx, t, o)
+	if diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
+	}
+	if err := writeRepoAdd(t, prepared); err != nil {
+		res.Fail(report.Diagnostic{Code: "REPO_ADD_WRITE_FAILED", Message: err.Error()})
+		return res, report.ExitExecution
+	}
+	res.Data = map[string]any{"added": prepared.repository, "actions": prepared.actions, "phase": prepared.state.Phase}
+	return res, report.ExitOK
+}
+
+func (s Service) prepareRepoAdd(ctx context.Context, t domain.Task, o RepoAddOptions) (repoAddPlan, *report.Diagnostic, report.ExitCode) {
+	empty := repoAddPlan{}
+	if o.Repository == "" {
+		return empty, &report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "a --repo is required"}, report.ExitConfig
+	}
+	parts := strings.SplitN(o.Repository, "=", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return empty, &report.Diagnostic{Code: "INVALID_REPOSITORY", Message: "--repo must use name=path"}, report.ExitConfig
+	}
+	name, rawPath := parts[0], parts[1]
+	existing := map[string]bool{}
+	for _, r := range t.Repositories {
+		existing[r.Name] = true
+	}
+	if existing[name] {
+		return empty, &report.Diagnostic{Code: "REPOSITORY_EXISTS", Repo: name, Message: "repository " + name + " already exists in the task"}, report.ExitConfig
+	}
+	for _, dep := range o.DependsOn {
+		if dep == name {
+			return empty, &report.Diagnostic{Code: "UNKNOWN_DEPENDENCY", Repo: name, Message: "repository cannot depend on itself"}, report.ExitConfig
+		}
+		if !existing[dep] {
+			return empty, &report.Diagnostic{Code: "UNKNOWN_DEPENDENCY", Repo: name, Message: "depends on unknown repository " + dep}, report.ExitConfig
+		}
+	}
+	source, err := fsx.CanonicalExisting(rawPath)
+	if err != nil {
+		return empty, &report.Diagnostic{Code: "REPOSITORY_NOT_FOUND", Repo: name, Message: err.Error()}, report.ExitConfig
+	}
+	info, err := s.Git.Inspect(ctx, source)
+	if err != nil {
+		return empty, &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: name, Message: err.Error()}, report.ExitEnvironment
+	}
+	repository := domain.Repository{
+		Name:      name,
+		Source:    source,
+		Base:      "HEAD",
+		Branch:    "feature/" + strings.ToLower(t.Task.ID),
+		Worktree:  filepath.Join("worktrees", name),
+		DependsOn: append([]string(nil), o.DependsOn...),
+	}
+	merged := t
+	repositories := make([]domain.Repository, 0, len(t.Repositories)+1)
+	repositories = append(repositories, t.Repositories...)
+	repositories = append(repositories, repository)
+	merged.Repositories = repositories
+	if err = config.Validate(&merged); err != nil {
+		return empty, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
+	}
+	for i := range merged.Repositories {
+		if merged.Repositories[i].Name == name {
+			repository = merged.Repositories[i]
+			break
+		}
+	}
+	state, exists, err := loadStartState(t)
+	if err != nil {
+		return empty, &report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()}, report.ExitExecution
+	}
+	if !exists {
+		state = domain.State{SchemaVersion: 1, TaskID: t.Task.ID, Phase: "initialized", Repositories: map[string]domain.RepositoryState{}}
+	}
+	switch state.Phase {
+	case "initialized", "started", "failed":
+	default:
+		return empty, &report.Diagnostic{Code: "REPO_ADD_PHASE_UNSUPPORTED", Message: "repo add is only supported in initialized, started, or failed phase (current: " + state.Phase + ")"}, report.ExitConfig
+	}
+	digest, err := configDigest(merged)
+	if err != nil {
+		return empty, &report.Diagnostic{Code: "CONFIG_DIGEST_FAILED", Message: err.Error()}, report.ExitExecution
+	}
+	inventory, err := loadInventory(t)
+	if err != nil {
+		return empty, &report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()}, report.ExitExecution
+	}
+	inventory.Repositories = append(inventory.Repositories, domain.RepositoryFacts{Name: repository.Name, Root: info.Root, Remote: info.Remote, DefaultBranch: info.DefaultBranch})
+	now := time.Now().UTC()
+	if state.Repositories == nil {
+		state.Repositories = map[string]domain.RepositoryState{}
+	}
+	value := state.Repositories[name]
+	value.Worktree = repository.Worktree
+	if value.Actions == nil {
+		value.Actions = map[string]domain.ActionOutcome{}
+	}
+	if !merged.Execution.Fetch {
+		value.Actions["fetch"] = skippedOutcome(now)
+	} else if value.Actions["fetch"].Status == "" {
+		value.Actions["fetch"] = pendingOutcome(now)
+	}
+	if value.Actions["worktree"].Status == "" {
+		value.Actions["worktree"] = pendingOutcome(now)
+	}
+	state.Repositories[name] = value
+	state.ConfigDigest = digest
+	state.UpdatedAt = now
+	items, err := plan.Build(merged)
+	if err != nil {
+		return empty, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
+	}
+	actions := []plan.Item{}
+	for _, item := range items {
+		if item.Repo == name {
+			actions = append(actions, item)
+		}
+	}
+	return repoAddPlan{repository: repository, merged: merged, inventory: inventory, state: state, digest: digest, actions: actions}, nil, report.ExitOK
+}
+
 type StartOptions struct {
 	DryRun  bool
 	Execute bool
@@ -478,6 +632,95 @@ func samePath(a, b string) bool {
 	bb, e := filepath.Abs(b)
 	return e == nil && aa == bb
 }
+
+func loadInventory(t domain.Task) (domain.Inventory, error) {
+	raw, err := os.ReadFile(filepath.Join(t.Task.Root, ".taskflow", "inventory.json"))
+	if err != nil {
+		return domain.Inventory{}, err
+	}
+	var inventory domain.Inventory
+	if err = json.Unmarshal(raw, &inventory); err != nil {
+		return domain.Inventory{}, fmt.Errorf("decode inventory: %w", err)
+	}
+	return inventory, nil
+}
+
+type taskFileSnapshot struct {
+	path    string
+	data    []byte
+	existed bool
+}
+
+func snapshotTaskFile(path string) (taskFileSnapshot, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return taskFileSnapshot{path: path, data: data, existed: true}, nil
+	}
+	if os.IsNotExist(err) {
+		return taskFileSnapshot{path: path, existed: false}, nil
+	}
+	return taskFileSnapshot{}, err
+}
+
+func (s taskFileSnapshot) restore() error {
+	if !s.existed {
+		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return fsx.AtomicWrite(s.path, s.data, 0644)
+}
+
+func restoreTaskFiles(snapshots ...taskFileSnapshot) {
+	for index := len(snapshots) - 1; index >= 0; index-- {
+		_ = snapshots[index].restore()
+	}
+}
+
+func writeRepoAdd(t domain.Task, p repoAddPlan) error {
+	configPath := filepath.Join(t.Task.Root, "taskflow.yaml")
+	inventoryPath := filepath.Join(t.Task.Root, ".taskflow", "inventory.json")
+	statePath := filepath.Join(t.Task.Root, ".taskflow", "state.json")
+	configSnap, err := snapshotTaskFile(configPath)
+	if err != nil {
+		return err
+	}
+	inventorySnap, err := snapshotTaskFile(inventoryPath)
+	if err != nil {
+		return err
+	}
+	stateSnap, err := snapshotTaskFile(statePath)
+	if err != nil {
+		return err
+	}
+	configBytes, err := config.Marshal(p.merged)
+	if err != nil {
+		return err
+	}
+	inventoryBytes, err := json.MarshalIndent(p.inventory, "", "  ")
+	if err != nil {
+		return err
+	}
+	stateBytes, err := json.MarshalIndent(p.state, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err = fsx.AtomicWrite(configPath, configBytes, 0644); err != nil {
+		restoreTaskFiles(configSnap, inventorySnap, stateSnap)
+		return err
+	}
+	if err = fsx.AtomicWrite(inventoryPath, append(inventoryBytes, '\n'), 0644); err != nil {
+		restoreTaskFiles(configSnap, inventorySnap, stateSnap)
+		return err
+	}
+	if err = fsx.AtomicWrite(statePath, append(stateBytes, '\n'), 0644); err != nil {
+		restoreTaskFiles(configSnap, inventorySnap, stateSnap)
+		return err
+	}
+	return nil
+}
+
 func fetchRemote(base string) string {
 	if first, _, ok := strings.Cut(base, "/"); ok && first != "" {
 		return first
@@ -514,7 +757,12 @@ func (s Service) Status(ctx context.Context, t domain.Task) (report.Result, repo
 		}
 	}
 	validation, _ := loadValidationReport(t)
-	data.LastValidation = validation
+	digest, _ := configDigest(t)
+	stale := validation != nil && validation.ConfigDigest != digest
+	data.ValidationStale = stale
+	if !stale {
+		data.LastValidation = validation
+	}
 	statusByName := map[string]int{}
 	for _, repository := range t.Repositories {
 		worktree := filepath.Join(t.Task.Root, repository.Worktree)
@@ -527,7 +775,7 @@ func (s Service) Status(ctx context.Context, t domain.Task) (report.Result, repo
 			entry.Upstream, entry.Ahead, entry.Behind = info.Upstream, info.Ahead, info.Behind
 			entry.Pushed = info.Upstream != "" && info.Ahead == 0
 		}
-		if validation != nil {
+		if !stale && validation != nil {
 			if repositoryValidation, ok := validation.Repositories[repository.Name]; ok {
 				value := repositoryValidation.OK
 				entry.LastValidationOK = &value

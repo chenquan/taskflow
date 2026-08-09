@@ -129,7 +129,8 @@ type RepositoryStatus struct {
 }
 
 type StatusData struct {
-	Phase          string             `json:"phase"`
-	Repositories   []RepositoryStatus `json:"repositories"`
-	LastValidation *ValidationReport  `json:"lastValidation,omitempty"`
+	Phase           string             `json:"phase"`
+	Repositories    []RepositoryStatus `json:"repositories"`
+	LastValidation  *ValidationReport  `json:"lastValidation,omitempty"`
+	ValidationStale bool               `json:"validationStale"`
 }
