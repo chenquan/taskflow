@@ -42,6 +42,27 @@ Use the CLI as the authority for task-workspace, worktree, fetch, and tool-launc
    taskflow --json --tasks-root <tasks-root> start <task-id> --execute
    ```
 
+## Grow a task with another repository
+
+1. To attach another repository after `init` or `start`, use the append-only command. It only updates task metadata and advances the configuration digest; it does not create a worktree:
+
+   ```bash
+   taskflow --tasks-root <tasks-root> repo add <task-id> \
+     --repo <repo-name>=<absolute-path> \
+     [--depends-on <existing-repo>] \
+     [--dry-run]
+   ```
+
+2. `repo add` is allowed only while the task is in the `initialized`, `started`, or `failed` phase. It never modifies, removes, or reorders existing repositories and never changes the primary repository. The appended repository reuses the `init` defaults and receives no checks.
+3. Worktree creation still requires the dry-run and explicit execute flow. After an append, `start --execute` reuses existing worktrees and creates a worktree only for the appended repository:
+
+   ```bash
+   taskflow --tasks-root <tasks-root> start <task-id> --dry-run
+   taskflow --tasks-root <tasks-root> start <task-id> --execute
+   ```
+
+4. After an append, `status` reports `validationStale: true` until the next `validate` regenerates a report for the current configuration. Run `start --execute` to materialize the appended worktree before validating it.
+
 ## Work and verify
 
 1. Open a configured tool only after the managed worktrees are ready. Omitting `--tool` selects `development.default_tool`:

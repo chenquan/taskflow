@@ -108,6 +108,25 @@ func NewRootCommand() *cobra.Command {
 	}}
 	validate.Flags().StringVar(&validateRepo, "repo", "", "validate this repository and its dependencies")
 	root.AddCommand(validate)
+	var repoAddRepo string
+	var repoAddDepends []string
+	var repoAddDryRun bool
+	repoCmd := &cobra.Command{Use: "repo", Short: "Manage task repositories"}
+	repoAddCmd := &cobra.Command{Use: "add <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		t, e := svc.Load(tasksRoot, args[0])
+		if e != nil {
+			r := report.New("repo add", args[0])
+			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: e.Error()})
+			return render(c, r, report.ExitConfig)
+		}
+		r, code := svc.RepoAdd(context.Background(), t, app.RepoAddOptions{Repository: repoAddRepo, DependsOn: repoAddDepends, DryRun: repoAddDryRun})
+		return render(c, r, code)
+	}}
+	repoAddCmd.Flags().StringVar(&repoAddRepo, "repo", "", "repository name=absolute-path to append (required)")
+	repoAddCmd.Flags().StringSliceVar(&repoAddDepends, "depends-on", nil, "existing repository the appended repo depends on (repeatable)")
+	repoAddCmd.Flags().BoolVar(&repoAddDryRun, "dry-run", false, "show the resolved repository and start actions without writing")
+	repoCmd.AddCommand(repoAddCmd)
+	root.AddCommand(repoCmd)
 	var projectSkills, forceSkills bool
 	skillCmd := &cobra.Command{Use: "skill", Short: "Install Taskflow skills for AI coding agents"}
 	installSkills := &cobra.Command{Use: "install", Args: cobra.NoArgs, RunE: func(c *cobra.Command, args []string) error {

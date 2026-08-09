@@ -7,6 +7,7 @@ Taskflow 不会自动提交代码、推送分支、创建 PR、合并分支或�
 ## 特性
 
 - 一个任务关联多个本地 Git 仓库
+- 支持向已初始化或已启动的任务 append-only 追加仓库
 - 使用 Git worktree 隔离任务开发环境
 - 支持仓库依赖关系和拓扑执行顺序
 - 面向 Codex、Claude Code 等 AI 编程工具提供统一工作区
@@ -79,6 +80,25 @@ taskflow --tasks-root ~/tasks open REFUND-123 --tool codex
 taskflow --tasks-root ~/tasks status REFUND-123
 taskflow --tasks-root ~/tasks validate REFUND-123
 ```
+
+## 追加仓库
+
+任务初始化或启动后，如果发现还需要补充仓库，使用 append-only 的 `repo add`。它只追加任务元数据并推进配置 digest，不创建 worktree，也不会修改、删除已有仓库或更改主仓库。
+
+```bash
+taskflow --tasks-root ~/tasks repo add REFUND-123 \
+  --repo inventory-service=~/projects/inventory-service \
+  --depends-on order-service
+```
+
+追加后先用 dry-run 预览，再显式执行以创建新增仓库的 worktree（`start` 只为新增仓库创建 worktree，复用已有 worktree）：
+
+```bash
+taskflow --tasks-root ~/tasks start REFUND-123 --dry-run
+taskflow --tasks-root ~/tasks start REFUND-123 --execute
+```
+
+`repo add` 仅在任务处于 `initialized`、`started` 或 `failed` 阶段时允许，复用 `init` 的默认值（`base: HEAD`、`branch: feature/<task-id>`、`worktree: worktrees/<name>`、无 checks、默认无依赖）。追加会使既有验证报告失效，`status` 会返回 `validationStale: true`；运行 `start --execute` 建好新增 worktree 后，下一次 `validate` 会按新配置重新生成报告。
 
 ## 任务目录
 

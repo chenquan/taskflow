@@ -1,11 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -175,5 +177,262 @@ func TestOpenReportsToolSuccessAndFailure(t *testing.T) {
 	}
 	if result, code := service.Open(context.Background(), task, "unknown", nil, nil, nil); code != report.ExitConfig || result.OK {
 		t.Fatalf("invalid tool: code=%d result=%#v", code, result)
+	}
+}
+
+func TestRepoAddRollsBackOnWriteFailure(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("permission-based rollback test requires a non-root POSIX environment")
+	}
+	repo1 := makeGitRepo(t)
+	repo2 := makeGitRepo(t)
+	tasks := t.TempDir()
+	s := New()
+	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-R", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	task, err := s.Load(tasks, "TASK-R")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRoot := filepath.Join(tasks, "TASK-R")
+	stateDir := filepath.Join(taskRoot, ".taskflow")
+	beforeConfig, _ := os.ReadFile(filepath.Join(taskRoot, "taskflow.yaml"))
+	beforeInventory, _ := os.ReadFile(filepath.Join(stateDir, "inventory.json"))
+	beforeState, _ := os.ReadFile(filepath.Join(stateDir, "state.json"))
+	if err := os.Chmod(stateDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(stateDir, 0755)
+	result, code := s.RepoAdd(context.Background(), task, RepoAddOptions{Repository: "repo2=" + repo2})
+	_ = os.Chmod(stateDir, 0755)
+	if code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "REPO_ADD_WRITE_FAILED") {
+		t.Fatalf("expected write failure: %d %#v", code, result)
+	}
+	if after, _ := os.ReadFile(filepath.Join(taskRoot, "taskflow.yaml")); !bytes.Equal(beforeConfig, after) {
+		t.Fatal("configuration was not rolled back")
+	}
+	if after, _ := os.ReadFile(filepath.Join(stateDir, "inventory.json")); !bytes.Equal(beforeInventory, after) {
+		t.Fatal("inventory was changed")
+	}
+	if after, _ := os.ReadFile(filepath.Join(stateDir, "state.json")); !bytes.Equal(beforeState, after) {
+		t.Fatal("state was changed")
+	}
+}
+
+func loadAppState(t *testing.T, tasks, id string) domain.State {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(tasks, id, ".taskflow", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state domain.State
+	if err = json.Unmarshal(b, &state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func mutateAppState(t *testing.T, tasks, id string, fn func(*domain.State)) {
+	t.Helper()
+	state := loadAppState(t, tasks, id)
+	fn(&state)
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(tasks, id, ".taskflow", "state.json"), append(raw, '\n'), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepoAddAppendsAcrossPhasesAndPreservesOutcomes(t *testing.T) {
+	for _, phase := range []string{"initialized", "started", "failed"} {
+		t.Run(phase, func(t *testing.T) {
+			repo1 := makeGitRepo(t)
+			repo2 := makeGitRepo(t)
+			tasks := t.TempDir()
+			s := New()
+			if result, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-9", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK || !result.OK {
+				t.Fatalf("init: %d %#v", code, result)
+			}
+			task, err := s.Load(tasks, "TASK-9")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if phase == "started" || phase == "failed" {
+				running := task
+				if phase == "failed" {
+					running.Repositories[0].Branch = "not a valid branch"
+				}
+				result, code := s.Start(context.Background(), running, StartOptions{Execute: true})
+				if phase == "started" && (code != report.ExitOK || !result.OK) {
+					t.Fatalf("start: %d %#v", code, result)
+				}
+				if phase == "failed" && code != report.ExitPartial {
+					t.Fatalf("expected failed start: %d %#v", code, result)
+				}
+				if task, err = s.Load(tasks, "TASK-9"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, code := s.RepoAdd(context.Background(), task, RepoAddOptions{Repository: "repo2=" + repo2, DependsOn: []string{"repo1"}})
+			if code != report.ExitOK || !result.OK {
+				t.Fatalf("repo add: %d %#v", code, result)
+			}
+			merged, err := s.Load(tasks, "TASK-9")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(merged.Repositories) != 2 || merged.Repositories[1].Name != "repo2" {
+				t.Fatalf("unexpected repositories: %#v", merged.Repositories)
+			}
+			appended := merged.Repositories[1]
+			if appended.Base != "HEAD" || appended.Branch != "feature/task-9" || appended.Worktree != filepath.Join("worktrees", "repo2") || len(appended.DependsOn) != 1 || appended.DependsOn[0] != "repo1" {
+				t.Fatalf("unexpected appended defaults: %#v", appended)
+			}
+			state := loadAppState(t, tasks, "TASK-9")
+			if state.Phase != phase {
+				t.Fatalf("phase changed: %q", state.Phase)
+			}
+			digest, err := configDigest(merged)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.ConfigDigest != digest {
+				t.Fatalf("digest not advanced: %q != %q", state.ConfigDigest, digest)
+			}
+			repo2State, ok := state.Repositories["repo2"]
+			if !ok || repo2State.Actions["worktree"].Status != domain.ActionPending {
+				t.Fatalf("repo2 not pending: %#v", repo2State)
+			}
+			if existing := state.Repositories["repo1"].Actions["worktree"].Status; (phase == "started" && existing != domain.ActionCompleted) || (phase == "failed" && existing != domain.ActionFailed) {
+				t.Fatalf("repo1 outcome not preserved (%s): %#v", phase, state.Repositories["repo1"])
+			}
+		})
+	}
+}
+
+func TestRepoAddDryRunDoesNotWrite(t *testing.T) {
+	repo1 := makeGitRepo(t)
+	repo2 := makeGitRepo(t)
+	tasks := t.TempDir()
+	s := New()
+	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-D", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	task, err := s.Load(tasks, "TASK-D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, _ := os.ReadFile(filepath.Join(tasks, "TASK-D", "taskflow.yaml"))
+	beforeState, _ := os.ReadFile(filepath.Join(tasks, "TASK-D", ".taskflow", "state.json"))
+	result, code := s.RepoAdd(context.Background(), task, RepoAddOptions{Repository: "repo2=" + repo2, DryRun: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("dry-run: %d %#v", code, result)
+	}
+	data := result.Data.(map[string]any)
+	if data["dryRun"] != true {
+		t.Fatal("dryRun flag missing")
+	}
+	if added, _ := data["added"].(domain.Repository); added.Name != "repo2" {
+		t.Fatalf("added repo: %#v", added)
+	}
+	afterConfig, _ := os.ReadFile(filepath.Join(tasks, "TASK-D", "taskflow.yaml"))
+	afterState, _ := os.ReadFile(filepath.Join(tasks, "TASK-D", ".taskflow", "state.json"))
+	if !bytes.Equal(beforeConfig, afterConfig) || !bytes.Equal(beforeState, afterState) {
+		t.Fatal("dry-run wrote files")
+	}
+}
+
+func TestRepoAddValidationErrors(t *testing.T) {
+	repo1 := makeGitRepo(t)
+	notGit := t.TempDir()
+	tasks := t.TempDir()
+	s := New()
+	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-E", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	task, err := s.Load(tasks, "TASK-E")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutateAppState(t, tasks, "TASK-E", func(state *domain.State) { state.Phase = "starting" })
+	cases := []struct {
+		name string
+		opts RepoAddOptions
+		code string
+	}{
+		{"missing repo", RepoAddOptions{}, "INVALID_ARGUMENT"},
+		{"malformed", RepoAddOptions{Repository: "noequals"}, "INVALID_REPOSITORY"},
+		{"duplicate", RepoAddOptions{Repository: "repo1=" + repo1}, "REPOSITORY_EXISTS"},
+		{"not found", RepoAddOptions{Repository: "new=" + filepath.Join(tasks, "missing")}, "REPOSITORY_NOT_FOUND"},
+		{"not git", RepoAddOptions{Repository: "new=" + notGit}, "NOT_GIT_REPOSITORY"},
+		{"unknown dep", RepoAddOptions{Repository: "new=" + repo1, DependsOn: []string{"ghost"}}, "UNKNOWN_DEPENDENCY"},
+		{"self dep", RepoAddOptions{Repository: "new=" + repo1, DependsOn: []string{"new"}}, "UNKNOWN_DEPENDENCY"},
+		{"unsupported phase", RepoAddOptions{Repository: "new=" + repo1}, "REPO_ADD_PHASE_UNSUPPORTED"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, _ := s.RepoAdd(context.Background(), task, c.opts)
+			if result.OK || !hasDiagnostic(result.Errors, c.code) {
+				t.Fatalf("expected %s, got %#v", c.code, result.Errors)
+			}
+		})
+	}
+}
+
+func TestStatusReportsStaleValidationAfterAppend(t *testing.T) {
+	repo1 := makeGitRepo(t)
+	repo2 := makeGitRepo(t)
+	tasks := t.TempDir()
+	s := New()
+	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-S", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	task, err := s.Load(tasks, "TASK-S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, code := s.Start(context.Background(), task, StartOptions{Execute: true}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	if _, code := s.Validate(context.Background(), task); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	fresh, _ := s.Status(context.Background(), task)
+	if freshData := fresh.Data.(domain.StatusData); freshData.ValidationStale || freshData.LastValidation == nil {
+		t.Fatalf("expected fresh validation, got %#v", freshData)
+	}
+	task, err = s.Load(tasks, "TASK-S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, code := s.RepoAdd(context.Background(), task, RepoAddOptions{Repository: "repo2=" + repo2}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	task, err = s.Load(tasks, "TASK-S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, _ := s.Status(context.Background(), task)
+	staleData := stale.Data.(domain.StatusData)
+	if !staleData.ValidationStale || staleData.LastValidation != nil {
+		t.Fatalf("expected stale validation, got %#v", staleData)
+	}
+	for _, repo := range staleData.Repositories {
+		if repo.LastValidationOK != nil {
+			t.Fatalf("stale report projected onto repository %s", repo.Name)
+		}
+	}
+	if _, code := s.Start(context.Background(), task, StartOptions{Execute: true}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	if _, code := s.Validate(context.Background(), task); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	refreshed, _ := s.Status(context.Background(), task)
+	if refreshedData := refreshed.Data.(domain.StatusData); refreshedData.ValidationStale {
+		t.Fatalf("expected refreshed validation, got %#v", refreshedData)
 	}
 }
