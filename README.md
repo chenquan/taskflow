@@ -48,7 +48,7 @@ go install github.com/chenquan/taskflow@latest
 
 ```bash
 git clone https://github.com/chenquan/taskflow.git
-cd specflow
+cd taskflow
 go build -o taskflow .
 ```
 
