@@ -1,9 +1,9 @@
 version: 2
 
 builds:
-  - id: specflow
+  - id: taskflow
     main: .
-    binary: specflow
+    binary: taskflow
     env:
       - CGO_ENABLED=0
     goos:
@@ -14,7 +14,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X github.com/chenquan/specflow/cmd.Version={{ .Version }}
+      - -s -w -X github.com/chenquan/taskflow/cmd.Version={{ .Version }}
 
 archives:
   - formats: [tar.gz]
