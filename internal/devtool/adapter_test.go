@@ -12,7 +12,7 @@ import (
 func TestLaunchSpecSafety(t *testing.T) {
 	root := filepath.FromSlash("/tmp/task")
 	task := domain.Task{Task: domain.TaskInfo{Root: root}, Primary: "a", Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a"}, {Name: "b", Worktree: "worktrees/b"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"claude": {Executable: "custom-claude", LoadAdditionalInstructions: true}}}}
-	s, e := AdapterImpl{Tool: "claude"}.Build(task)
+	s, e := AdapterImpl{Tool: "claude"}.Build(task, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -24,7 +24,7 @@ func TestLaunchSpecSafety(t *testing.T) {
 func TestCodexUsesConfiguredExecutableAndAdditionalDirectories(t *testing.T) {
 	root := filepath.FromSlash("/tmp/task")
 	task := domain.Task{Task: domain.TaskInfo{Root: root}, Primary: "owner", Repositories: []domain.Repository{{Name: "owner", Worktree: "worktrees/owner"}, {Name: "sdk", Worktree: "worktrees/sdk"}, {Name: "ui", Worktree: "worktrees/ui"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"codex": {Executable: "/opt/tools/custom-codex"}}}}
-	spec, err := (AdapterImpl{Tool: "codex"}).Build(task)
+	spec, err := (AdapterImpl{Tool: "codex"}).Build(task, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestLaunchSpecRejectsInvalidPolicies(t *testing.T) {
 			task := base
 			task.Development.Tools = map[string]domain.ToolDef{"codex": base.Development.Tools["codex"]}
 			tc.edit(&task)
-			if _, err := (AdapterImpl{Tool: tc.tool}).Build(task); err == nil {
+			if _, err := (AdapterImpl{Tool: tc.tool}).Build(task, nil); err == nil {
 				t.Fatal("expected policy error")
 			}
 		})
@@ -63,5 +63,25 @@ func TestApplyEnvPreservesBaseAndOverlay(t *testing.T) {
 	got := ApplyEnv(base, []string{"B=2"})
 	if !reflect.DeepEqual(got, []string{"A=1", "B=2"}) || len(base) != 1 {
 		t.Fatalf("base=%v got=%v", base, got)
+	}
+}
+
+func TestBuildAppendsExtraArgsAndAllowsPermissionBypass(t *testing.T) {
+	root := filepath.FromSlash("/tmp/task")
+	task := domain.Task{Task: domain.TaskInfo{Root: root}, Primary: "repo", Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}}}
+	spec, err := AdapterImpl{Tool: "codex"}.Build(task, []string{"--model", "gpt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := spec.Args[len(spec.Args)-2:]
+	if last[0] != "--model" || last[1] != "gpt" {
+		t.Fatalf("extra args not appended: %#v", spec.Args)
+	}
+	spec, err = (AdapterImpl{Tool: "codex"}).Build(task, []string{"--dangerously-skip-permissions"})
+	if err != nil || len(spec.Args) != 3 || spec.Args[len(spec.Args)-1] != "--dangerously-skip-permissions" {
+		t.Fatalf("permission bypass argument should be forwarded: %#v, %v", spec, err)
+	}
+	if _, err := (AdapterImpl{Tool: "codex"}).Build(task, []string{"--worktree", "other"}); err == nil {
+		t.Fatal("expected nested worktree argument to be rejected")
 	}
 }

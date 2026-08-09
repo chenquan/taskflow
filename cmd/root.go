@@ -73,14 +73,14 @@ func NewRootCommand() *cobra.Command {
 	start.Flags().BoolVar(&execute, "execute", false, "execute the planned worktree actions")
 	root.AddCommand(start)
 	var tool string
-	openCmd := &cobra.Command{Use: "open <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+	openCmd := &cobra.Command{Use: "open <task-id> [-- <tool-args>...]", Args: cobra.MinimumNArgs(1), RunE: func(c *cobra.Command, args []string) error {
 		t, e := svc.Load(tasksRoot, args[0])
 		if e != nil {
 			r := report.New("open", args[0])
 			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: e.Error()})
 			return render(c, r, report.ExitConfig)
 		}
-		r, code := svc.Open(context.Background(), t, tool, c.InOrStdin(), c.OutOrStdout(), c.ErrOrStderr())
+		r, code := svc.Open(context.Background(), t, tool, args[1:], c.InOrStdin(), c.OutOrStdout(), c.ErrOrStderr())
 		return render(c, r, code)
 	}}
 	openCmd.Flags().StringVar(&tool, "tool", "", "codex or claude")

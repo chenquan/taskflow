@@ -321,6 +321,7 @@ func TestE2EValidation(t *testing.T) {
 		t.Fatalf("timeout: %d %#v", e2eCode(err), result)
 	}
 	t.Setenv("TASKFLOW_E2E_CHECK_DELAY", "")
+	mutateSafetyTask(t, f.tasks, "checks", func(task *domain.Task) { task.Repositories[0].Checks[0].Timeout = "2s" })
 	if out, err := runSafetyCobra(t, f.tasks, "validate", "checks"); err != nil {
 		t.Fatal(out, err)
 	}
@@ -376,6 +377,29 @@ func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 	}
 	if got := safetyLog(t, f.toolLog); len(got) != 3 {
 		t.Fatalf("tool launches: %v", got)
+	}
+}
+
+func TestE2EOpenPassesThroughExtraArgsAndPermissionBypass(t *testing.T) {
+	f := newSafetyFixture(t)
+	if out, err := runSafetyCobra(t, f.tasks, "init", "passthru", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+		t.Fatalf("init: %v: %s", err, out)
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "start", "passthru", "--execute"); err != nil {
+		t.Fatalf("start: %v: %s", err, out)
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "open", "passthru", "--tool", "codex", "--", "--model", "gpt-5"); err != nil || !strings.Contains(out, "open: ok") {
+		t.Fatalf("open passthru: %v %s", err, out)
+	}
+	lines := safetyLog(t, f.toolLog)
+	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], "--model gpt-5") {
+		t.Fatalf("extra args not forwarded to tool: %v", lines)
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "open", "passthru", "--tool", "codex", "--", "--dangerously-skip-permissions"); err != nil || !strings.Contains(out, "open: ok") {
+		t.Fatalf("permission bypass argument should be forwarded: %v %s", err, out)
+	}
+	if got := safetyLog(t, f.toolLog); len(got) != len(lines)+1 || !strings.Contains(got[len(got)-1], "--dangerously-skip-permissions") {
+		t.Fatalf("permission bypass argument was not forwarded: %v", got)
 	}
 }
 
