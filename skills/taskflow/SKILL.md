@@ -7,6 +7,18 @@ description: Safely operate Taskflow AI coding workspaces across multiple Git re
 
 Use the CLI as the authority for task-workspace, worktree, fetch, and tool-launch operations. Do not replace those operations with shell-composed Git or filesystem mutations.
 
+## Next-step guidance
+
+After every taskflow command, report the outcome and state the recommended next step before stopping. Keep it short: a one-line conclusion plus the next command to run. Typical transitions:
+
+- `init` → `start --dry-run` to preview worktree creation and resolve reported errors.
+- `start --dry-run` → present the coordination summary, obtain execute approval, then `start --execute`.
+- `start --execute` → `open` to start work, or `validate` to run checks.
+- `repo add` → `start --dry-run`, then `start --execute` (only the appended repo gets a new worktree).
+- `open` → do the work, then `validate`.
+- `validate` → `status`, then report any blockers.
+- a failed command → report its diagnostic code and message, then propose the smallest safe corrective next command (see Safety rules).
+
 ## Locate and inspect
 
 1. Ask for the task ID. The task directory is `<tasks-root>/<task-id>`; `--tasks-root` defaults to the current directory.
