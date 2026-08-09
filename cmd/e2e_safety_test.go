@@ -321,6 +321,7 @@ func TestE2EValidation(t *testing.T) {
 		t.Fatalf("timeout: %d %#v", e2eCode(err), result)
 	}
 	t.Setenv("TASKFLOW_E2E_CHECK_DELAY", "")
+	mutateSafetyTask(t, f.tasks, "checks", func(task *domain.Task) { task.Repositories[0].Checks[0].Timeout = "2s" })
 	if out, err := runSafetyCobra(t, f.tasks, "validate", "checks"); err != nil {
 		t.Fatal(out, err)
 	}
