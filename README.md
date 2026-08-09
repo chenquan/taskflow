@@ -98,7 +98,6 @@ specflow --tasks-root ~/tasks finish REFUND-123 --dry-run
 
 ```text
 ~/tasks/REFUND-123/
-├── requirement.md
 ├── specflow.yaml
 ├── .specflow/
 │   ├── inventory.json

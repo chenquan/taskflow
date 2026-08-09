@@ -130,9 +130,6 @@ func writeTask(t domain.Task, s Service, ctx context.Context) error {
 	if err = fsx.AtomicWrite(filepath.Join(root, "specflow.yaml"), raw, 0644); err != nil {
 		return err
 	}
-	if err = fsx.AtomicWrite(filepath.Join(root, "requirement.md"), []byte("# "+t.Task.ID+"\n\n"), 0644); err != nil {
-		return err
-	}
 	inv := domain.Inventory{SchemaVersion: 1, TaskID: t.Task.ID}
 	for _, r := range t.Repositories {
 		info, e := s.Git.Inspect(ctx, r.Source)

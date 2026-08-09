@@ -27,7 +27,7 @@ func makeGitRepo(t *testing.T) string {
 	return dir
 }
 
-func TestLifecycleDoesNotRequireOpenSpec(t *testing.T) {
+func TestLifecycleDoesNotRequireRequirementFile(t *testing.T) {
 	repo := makeGitRepo(t)
 	tasks := t.TempDir()
 	s := New()
