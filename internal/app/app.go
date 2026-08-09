@@ -728,12 +728,12 @@ func fetchRemote(base string) string {
 	return "origin"
 }
 
-func (s Service) Open(ctx context.Context, t domain.Task, tool string, stdin io.Reader, stdout, stderr io.Writer) (report.Result, report.ExitCode) {
+func (s Service) Open(ctx context.Context, t domain.Task, tool string, extraArgs []string, stdin io.Reader, stdout, stderr io.Writer) (report.Result, report.ExitCode) {
 	r := report.New("open", t.Task.ID)
 	if tool == "" {
 		tool = t.Development.DefaultTool
 	}
-	spec, err := devtool.AdapterImpl{Tool: tool}.Build(t)
+	spec, err := devtool.AdapterImpl{Tool: tool}.Build(t, extraArgs)
 	if err != nil {
 		r.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: err.Error()})
 		return r, report.ExitConfig

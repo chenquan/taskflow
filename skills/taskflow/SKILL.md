@@ -84,7 +84,7 @@ After every taskflow command, report the outcome and state the recommended next 
    taskflow --tasks-root <tasks-root> open <task-id> --tool claude
    ```
 
-   Do not add permission-bypass flags or create nested worktrees.
+   Pass extra tool arguments after `--` (e.g., `open <task-id> -- --model opus`). Permission-bypass and nested-worktree flags are rejected whether passed explicitly or forwarded via `--`.
 
 2. Inspect progress with `status`; execute repository checks with `validate`. `validate <task-id> --repo <repo-name>` includes that repository's dependencies.
 3. If `start --execute` partially fails, inspect `status` and the persisted state, fix the external cause, then rerun the same execute command. Taskflow reconciles compatible state and actual Git/worktree facts; never delete state or worktrees to force a retry.

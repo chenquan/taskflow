@@ -81,6 +81,12 @@ taskflow --tasks-root ~/tasks status REFUND-123
 taskflow --tasks-root ~/tasks validate REFUND-123
 ```
 
+`open` 支持用 `--` 透传额外参数给工具（权限绕过、嵌套 worktree 类参数仍被拒绝）：
+
+```bash
+taskflow --tasks-root ~/tasks open REFUND-123 --tool codex -- --model gpt-5
+```
+
 ## 追加仓库
 
 任务初始化或启动后，如果发现还需要补充仓库，使用 append-only 的 `repo add`。它只追加任务元数据并推进配置 digest，不创建 worktree，也不会修改、删除已有仓库或更改主仓库。

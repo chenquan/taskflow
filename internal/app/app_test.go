@@ -168,14 +168,14 @@ func TestOpenReportsToolSuccessAndFailure(t *testing.T) {
 		Development:  domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}},
 	}
 	service := Service{Runner: openRunner{}}
-	if result, code := service.Open(context.Background(), task, "", nil, nil, nil); code != report.ExitOK || !result.OK {
+	if result, code := service.Open(context.Background(), task, "", nil, nil, nil, nil); code != report.ExitOK || !result.OK {
 		t.Fatalf("success: code=%d result=%#v", code, result)
 	}
 	service.Runner = openRunner{err: os.ErrClosed}
-	if result, code := service.Open(context.Background(), task, "codex", nil, nil, nil); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "TOOL_EXITED") {
+	if result, code := service.Open(context.Background(), task, "codex", nil, nil, nil, nil); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "TOOL_EXITED") {
 		t.Fatalf("failure: code=%d result=%#v", code, result)
 	}
-	if result, code := service.Open(context.Background(), task, "unknown", nil, nil, nil); code != report.ExitConfig || result.OK {
+	if result, code := service.Open(context.Background(), task, "unknown", nil, nil, nil, nil); code != report.ExitConfig || result.OK {
 		t.Fatalf("invalid tool: code=%d result=%#v", code, result)
 	}
 }

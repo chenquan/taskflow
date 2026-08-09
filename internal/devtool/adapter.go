@@ -13,11 +13,11 @@ type LaunchSpec struct {
 	Args, Env       []string
 }
 type Adapter interface {
-	Build(domain.Task) (LaunchSpec, error)
+	Build(domain.Task, []string) (LaunchSpec, error)
 }
 type AdapterImpl struct{ Tool string }
 
-func (a AdapterImpl) Build(t domain.Task) (LaunchSpec, error) {
+func (a AdapterImpl) Build(t domain.Task, extraArgs []string) (LaunchSpec, error) {
 	if a.Tool != "codex" && a.Tool != "claude" {
 		return LaunchSpec{}, fmt.Errorf("unsupported tool %s", a.Tool)
 	}
@@ -42,6 +42,7 @@ func (a AdapterImpl) Build(t domain.Task) (LaunchSpec, error) {
 		}
 	}
 	spec.Args = append(spec.Args, "--add-dir", t.Task.Root)
+	spec.Args = append(spec.Args, extraArgs...)
 	if a.Tool == "claude" && definition.LoadAdditionalInstructions {
 		spec.Env = []string{"CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"}
 	}
