@@ -36,7 +36,7 @@ The test suite SHALL execute the user-facing task lifecycle through the Cobra co
 - **THEN** the first command records a failed partial state, the retry reuses the worktree, creates only the missing change, and transitions the task to started
 
 #### Scenario: Concurrent lifecycle operations conflict safely
-- **WHEN** one start holds the task lock or one development tool holds the active session lease
+- **WHEN** one start holds the task lock
 - **THEN** a competing command returns the conflict exit code without corrupting state, and the first operation completes after release
 
 #### Scenario: Invalid lifecycle requests preserve state

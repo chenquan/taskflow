@@ -51,7 +51,7 @@ Use the CLI as the authority for task-workspace, worktree, and tool-launch opera
    specflow --tasks-root <tasks-root> open <task-id> --tool claude
    ```
 
-   Do not add permission-bypass flags, create nested worktrees, or launch a second active task session.
+   Do not add permission-bypass flags or create nested worktrees.
 
 2. Inspect progress with `status`; execute repository checks with `validate`. To limit validation, use `validate <task-id> --repo <repo-name>`.
 3. Before declaring work complete, run:

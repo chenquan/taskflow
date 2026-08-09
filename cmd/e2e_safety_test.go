@@ -395,10 +395,82 @@ func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 	}
 	t.Setenv("SPECFLOW_E2E_TOOL_EXIT_CODE", "")
 	if out, err := runSafetyCobra(t, f.tasks, "open", "tools", "--tool", "codex"); err != nil || !strings.Contains(out, "open: ok") {
-		t.Fatalf("session release: %v %s", err, out)
+		t.Fatalf("tool relaunch: %v %s", err, out)
 	}
 	if got := safetyLog(t, f.toolLog); len(got) != 3 {
 		t.Fatalf("tool launches: %v", got)
+	}
+}
+
+func TestE2EResumesCompletedActionsAndRejectsIncompatibleState(t *testing.T) {
+	f := newSafetyFixture(t)
+	remote := filepath.Join(f.root, "resume-remote.git")
+	for _, args := range [][]string{{"init", "--bare", remote}, {"-C", f.repo, "remote", "add", "origin", remote}, {"-C", f.repo, "push", "-u", "origin", "main"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "init", "resume", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+		t.Fatal(out, err)
+	}
+	mutateSafetyTask(t, f.tasks, "resume", func(task *domain.Task) {
+		task.Execution.Fetch = true
+		task.Repositories[0].Base = "origin/main"
+	})
+	if out, err := exec.Command("git", "-C", f.repo, "remote", "set-url", "origin", filepath.Join(f.root, "missing-remote.git")).CombinedOutput(); err != nil {
+		t.Fatalf("break remote: %v: %s", err, out)
+	}
+	out, err := runSafetyCobra(t, f.tasks, "start", "resume", "--execute")
+	if e2eCode(err) != int(report.ExitPartial) || !strings.Contains(out, "START_FAILED") {
+		t.Fatalf("expected resumable fetch failure: %d %s", e2eCode(err), out)
+	}
+	stateAfterFailure := safetyState(t, f.tasks, "resume")
+	if !bytes.Contains(stateAfterFailure, []byte(`"directory":`)) || !bytes.Contains(stateAfterFailure, []byte(`"status": "completed"`)) {
+		t.Fatalf("completed directory was not persisted: %s", stateAfterFailure)
+	}
+	if out, err := exec.Command("git", "-C", f.repo, "remote", "set-url", "origin", remote).CombinedOutput(); err != nil {
+		t.Fatalf("restore remote: %v: %s", err, out)
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "start", "resume", "--execute"); err != nil {
+		t.Fatalf("resume: %v %s", err, out)
+	}
+	worktree := filepath.Join(f.tasks, "resume", "worktrees", "repo")
+	if out, err := exec.Command("git", "-C", f.repo, "worktree", "remove", "--force", worktree).CombinedOutput(); err != nil {
+		t.Fatalf("remove worktree for recovery: %v: %s", err, out)
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "start", "resume", "--execute"); err != nil {
+		t.Fatalf("worktree was not recreated: %v %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", f.repo, "remote", "set-url", "origin", filepath.Join(f.root, "missing-again.git")).CombinedOutput(); err != nil {
+		t.Fatalf("break remote again: %v: %s", err, out)
+	}
+	if out, err := runSafetyCobra(t, f.tasks, "start", "resume", "--execute"); err != nil {
+		t.Fatalf("completed fetch was repeated: %v %s", err, out)
+	}
+
+	before := safetyState(t, f.tasks, "resume")
+	mutateSafetyTask(t, f.tasks, "resume", func(task *domain.Task) { task.Task.Description = "changed after start" })
+	out, err = runSafetyCobra(t, f.tasks, "--json", "start", "resume", "--execute")
+	result := decodeSafety(t, out)
+	if e2eCode(err) != int(report.ExitConflict) || len(result.Errors) != 1 || result.Errors[0].Code != "STATE_CONFLICT" {
+		t.Fatalf("state conflict: %d %#v", e2eCode(err), result)
+	}
+	if !bytes.Equal(before, safetyState(t, f.tasks, "resume")) {
+		t.Fatal("state conflict changed persisted state")
+	}
+
+	corrupt := []byte("{not-json\n")
+	statePath := filepath.Join(f.tasks, "resume", ".specflow", "state.json")
+	if err := os.WriteFile(statePath, corrupt, 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runSafetyCobra(t, f.tasks, "--json", "start", "resume", "--execute")
+	result = decodeSafety(t, out)
+	if e2eCode(err) != int(report.ExitExecution) || len(result.Errors) != 1 || result.Errors[0].Code != "STATE_INCOMPATIBLE" {
+		t.Fatalf("corrupt state: %d %#v", e2eCode(err), result)
+	}
+	if !bytes.Equal(corrupt, safetyState(t, f.tasks, "resume")) {
+		t.Fatal("corrupt state was overwritten")
 	}
 }
 

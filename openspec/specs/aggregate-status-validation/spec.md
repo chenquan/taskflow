@@ -5,7 +5,7 @@ Define aggregate status, validation, and non-mutating readiness reporting.
 ## Requirements
 
 ### Requirement: Aggregate task status
-The CLI SHALL provide `status <task-id>` with per-repository branch/worktree, dirty-file, OpenSpec change, task phase, and active-session information in text and JSON modes.
+The CLI SHALL provide `status <task-id>` with per-repository branch/worktree, dirty-file, and task phase information in text and JSON modes.
 
 #### Scenario: Status after start
 - **WHEN** a task has started worktrees and changes

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/chenquan/specflow/internal/domain"
 	"github.com/chenquan/specflow/internal/report"
-	"github.com/chenquan/specflow/internal/session"
 )
 
 func makeGitRepo(t *testing.T) string {
@@ -84,22 +84,47 @@ func TestDoctorReportsDirtySourceWithoutOpenSpecError(t *testing.T) {
 	}
 }
 
-func TestStatusReportsActiveSession(t *testing.T) {
+func TestLoadStartStateCompatibility(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".specflow"), 0755); err != nil {
+	stateDir := filepath.Join(root, ".specflow")
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	holder, err := session.Acquire(root, "codex", "/tmp/primary")
-	if err != nil {
+	task := domain.Task{Task: domain.TaskInfo{ID: "TASK", Root: root}}
+	write := func(value any) []byte {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stateDir, "state.json"), raw, 0644); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	legacy := write(domain.State{SchemaVersion: 1, TaskID: "TASK", Phase: "initialized"})
+	state, exists, err := loadStartState(task)
+	if err != nil || !exists || state.ConfigDigest != "" {
+		t.Fatalf("legacy state: exists=%v err=%v state=%#v", exists, err, state)
+	}
+	corrupt := []byte("not-json")
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), corrupt, 0644); err != nil {
 		t.Fatal(err)
 	}
-	defer holder.Release()
-	result, code := New().Status(context.Background(), domain.Task{Task: domain.TaskInfo{ID: "TASK", Root: root}})
-	data := result.Data.(domain.StatusData)
-	lease, ok := data.ActiveSession.(*session.Lease)
-	if code != report.ExitOK || !ok || lease.Tool != "codex" {
-		t.Fatalf("status: code=%d result=%#v", code, result)
+	if _, _, err := loadStartState(task); err == nil {
+		t.Fatal("expected corrupt state error")
 	}
+	if got, err := os.ReadFile(filepath.Join(stateDir, "state.json")); err != nil || string(got) != string(corrupt) {
+		t.Fatalf("corrupt state changed: %q %v", got, err)
+	}
+	wrong := write(domain.State{SchemaVersion: 2, TaskID: "TASK"})
+	if _, _, err := loadStartState(task); err == nil {
+		t.Fatal("expected incompatible schema error")
+	}
+	if got, err := os.ReadFile(filepath.Join(stateDir, "state.json")); err != nil || string(got) != string(wrong) {
+		t.Fatalf("incompatible state changed: %q %v", got, err)
+	}
+	_ = legacy
 }
 
 func hasDiagnostic(diagnostics []report.Diagnostic, code string) bool {

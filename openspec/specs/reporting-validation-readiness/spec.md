@@ -19,7 +19,7 @@ Validation MUST run repository checks in topological dependency order.
 - **THEN** validation executes the dependency check first
 
 ### Requirement: Report and enforce task readiness state
-Status MUST include an active live session when present. Finish MUST treat dirty managed worktrees as blockers and return validation failure.
+Finish MUST treat dirty managed worktrees as blockers and return validation failure.
 
 #### Scenario: Dirty worktree on finish
 - **WHEN** a managed worktree has uncommitted changes

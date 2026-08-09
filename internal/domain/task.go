@@ -67,6 +67,7 @@ type RepositoryFacts struct {
 type State struct {
 	SchemaVersion int                        `json:"schemaVersion"`
 	TaskID        string                     `json:"taskID"`
+	ConfigDigest  string                     `json:"configDigest,omitempty"`
 	Phase         string                     `json:"phase"`
 	UpdatedAt     time.Time                  `json:"updatedAt"`
 	Directory     ActionOutcome              `json:"directory,omitempty"`
@@ -136,7 +137,6 @@ type RepositoryStatus struct {
 type StatusData struct {
 	Phase          string             `json:"phase"`
 	Repositories   []RepositoryStatus `json:"repositories"`
-	ActiveSession  any                `json:"activeSession,omitempty"`
 	LastValidation *ValidationReport  `json:"lastValidation,omitempty"`
 }
 
