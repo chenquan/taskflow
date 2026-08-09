@@ -8,7 +8,7 @@ import (
 
 func TestJSONResultHasStableFields(t *testing.T) {
 	var b bytes.Buffer
-	r := New("doctor", "A")
+	r := New("status", "A")
 	r.Fail(Diagnostic{Code: "X", Message: "bad"})
 	if err := Render(&b, r, true); err != nil {
 		t.Fatal(err)
@@ -27,6 +27,18 @@ func TestTextResultRendersData(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(b.String(), "data:") || !strings.Contains(b.String(), "FETCH a") {
+		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestWarningsRenderAsText(t *testing.T) {
+	var b bytes.Buffer
+	r := New("validate", "A")
+	r.Warn(Diagnostic{Code: "warning", Message: "be careful"})
+	if err := Render(&b, r, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "warning [warning] be careful") {
 		t.Fatalf("%q", b.String())
 	}
 }

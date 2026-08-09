@@ -16,6 +16,17 @@ func TestWithin(t *testing.T) {
 	}
 }
 
+func TestCanonicalExisting(t *testing.T) {
+	root := t.TempDir()
+	path, err := CanonicalExisting(root)
+	if err != nil || path == "" {
+		t.Fatalf("path=%q err=%v", path, err)
+	}
+	if _, err := CanonicalExisting(filepath.Join(root, "missing")); err == nil {
+		t.Fatal("expected missing path error")
+	}
+}
+
 func TestRequireWithin(t *testing.T) {
 	root := t.TempDir()
 	if err := RequireWithin(root, filepath.Join(root, "child")); err != nil {

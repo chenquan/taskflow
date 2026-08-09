@@ -78,5 +78,5 @@ func coverage(path string) (float64, int, int, error) {
 }
 
 func excluded(location string) bool {
-	return strings.Contains(location, "/internal/testfixture/") || strings.Contains(location, "/internal/tools/coveragecheck/") || strings.Contains(location, "/specflow/main.go:")
+	return strings.Contains(location, "/internal/testfixture/") || strings.Contains(location, "/internal/tools/coveragecheck/") || strings.Contains(location, "/taskflow/main.go:")
 }

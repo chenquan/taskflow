@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/chenquan/specflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/domain"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +10,7 @@ import (
 )
 
 func task(root string) domain.Task {
-	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}}}}
+	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}}}
 }
 
 func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T) {
@@ -23,7 +23,7 @@ func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "specflow.yaml")
+	path := filepath.Join(t.TempDir(), "taskflow.yaml")
 	legacy := strings.Replace(string(raw), "execution: {}", "execution:\n    create_openspec_change: true", 1)
 	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
 		t.Fatal(err)
@@ -52,15 +52,13 @@ func TestValidateDevelopmentPolicy(t *testing.T) {
 	}
 	v := task(d)
 	v.Development.DefaultTool = "claude"
-	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "not enabled") {
-		t.Fatalf("expected disabled default rejection, got %v", err)
+	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "no definition") {
+		t.Fatalf("expected missing default definition rejection, got %v", err)
 	}
 	v = task(d)
-	definition := v.Development.Tools["codex"]
-	definition.LaunchMode = "shell"
-	v.Development.Tools["codex"] = definition
-	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "launch mode") {
-		t.Fatalf("expected launch mode rejection, got %v", err)
+	v.Development.Tools["unknown"] = domain.ToolDef{Executable: "unknown"}
+	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "unsupported development tool") {
+		t.Fatalf("expected unsupported tool rejection, got %v", err)
 	}
 }
 func TestValidateDefaults(t *testing.T) {
@@ -74,6 +72,19 @@ func TestValidateDefaults(t *testing.T) {
 	}
 	if v.Repositories[0].Worktree != filepath.Join("worktrees", "one") {
 		t.Fatal(v.Repositories[0].Worktree)
+	}
+}
+
+func TestValidateDerivesVersionAndPrimary(t *testing.T) {
+	d := t.TempDir()
+	v := task(d)
+	v.Version = 0
+	v.Primary = ""
+	if err := Validate(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Version != domain.ConfigVersion || v.Primary != "one" {
+		t.Fatalf("version=%d primary=%q", v.Version, v.Primary)
 	}
 }
 func TestValidateCycle(t *testing.T) {

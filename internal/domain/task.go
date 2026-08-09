@@ -5,31 +5,27 @@ import "time"
 const ConfigVersion = 1
 
 type Task struct {
-	Version      int          `yaml:"version" json:"version"`
+	Version      int          `yaml:"-" json:"-"`
 	Task         TaskInfo     `yaml:"task" json:"task"`
-	Primary      string       `yaml:"primary" json:"primary"`
+	Primary      string       `yaml:"-" json:"-"`
 	Repositories []Repository `yaml:"repositories" json:"repositories"`
 	Development  Development  `yaml:"development" json:"development"`
 	Execution    Execution    `yaml:"execution" json:"execution"`
 }
 
 type TaskInfo struct {
-	ID          string `yaml:"id" json:"id"`
-	Title       string `yaml:"title" json:"title"`
-	Description string `yaml:"description" json:"description"`
-	Root        string `yaml:"root" json:"root"`
+	ID   string `yaml:"id" json:"id"`
+	Root string `yaml:"-" json:"-"`
 }
 
 type Repository struct {
-	Name          string   `yaml:"name" json:"name"`
-	Source        string   `yaml:"source" json:"source"`
-	Base          string   `yaml:"base" json:"base"`
-	Branch        string   `yaml:"branch" json:"branch"`
-	Worktree      string   `yaml:"worktree" json:"worktree"`
-	Role          string   `yaml:"role" json:"role"`
-	ContractOwner bool     `yaml:"contract_owner" json:"contractOwner"`
-	DependsOn     []string `yaml:"depends_on" json:"dependsOn"`
-	Checks        []Check  `yaml:"checks" json:"checks"`
+	Name      string   `yaml:"name" json:"name"`
+	Source    string   `yaml:"source" json:"source"`
+	Base      string   `yaml:"base" json:"base"`
+	Branch    string   `yaml:"branch" json:"branch"`
+	Worktree  string   `yaml:"worktree" json:"worktree"`
+	DependsOn []string `yaml:"depends_on" json:"dependsOn"`
+	Checks    []Check  `yaml:"checks" json:"checks"`
 }
 
 type Check struct {
@@ -40,13 +36,11 @@ type Check struct {
 }
 
 type Development struct {
-	DefaultTool  string             `yaml:"default_tool" json:"defaultTool"`
-	EnabledTools []string           `yaml:"enabled_tools" json:"enabledTools"`
-	Tools        map[string]ToolDef `yaml:"tools" json:"tools"`
+	DefaultTool string             `yaml:"default_tool" json:"defaultTool"`
+	Tools       map[string]ToolDef `yaml:"tools" json:"tools"`
 }
 type ToolDef struct {
 	Executable                 string `yaml:"executable" json:"executable"`
-	LaunchMode                 string `yaml:"launch_mode" json:"launchMode"`
 	LoadAdditionalInstructions bool   `yaml:"load_additional_instructions" json:"loadAdditionalInstructions"`
 }
 type Execution struct {
@@ -67,6 +61,7 @@ type RepositoryFacts struct {
 type State struct {
 	SchemaVersion int                        `json:"schemaVersion"`
 	TaskID        string                     `json:"taskID"`
+	ConfigDigest  string                     `json:"configDigest,omitempty"`
 	Phase         string                     `json:"phase"`
 	UpdatedAt     time.Time                  `json:"updatedAt"`
 	Directory     ActionOutcome              `json:"directory,omitempty"`
@@ -136,18 +131,5 @@ type RepositoryStatus struct {
 type StatusData struct {
 	Phase          string             `json:"phase"`
 	Repositories   []RepositoryStatus `json:"repositories"`
-	ActiveSession  any                `json:"activeSession,omitempty"`
 	LastValidation *ValidationReport  `json:"lastValidation,omitempty"`
-}
-
-type FinishData struct {
-	Status          StatusData        `json:"status"`
-	Validation      *ValidationReport `json:"validation,omitempty"`
-	ValidationOrder []string          `json:"validationOrder"`
-	MergeOrder      []string          `json:"mergeOrder"`
-	ArchiveOrder    []string          `json:"archiveOrder"`
-	CleanupOrder    []string          `json:"cleanupOrder"`
-	CleanupBlockers []string          `json:"cleanupBlockers"`
-	Archive         string            `json:"archive"`
-	Cleanup         string            `json:"cleanup"`
 }

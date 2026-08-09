@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenquan/specflow/internal/domain"
-	"github.com/chenquan/specflow/internal/fsx"
+	"github.com/chenquan/taskflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/fsx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,7 +24,7 @@ func ValidateTaskID(taskID string) error {
 	return nil
 }
 
-func Path(tasksRoot, taskID string) string { return filepath.Join(tasksRoot, taskID, "specflow.yaml") }
+func Path(tasksRoot, taskID string) string { return filepath.Join(tasksRoot, taskID, "taskflow.yaml") }
 func Load(path string) (domain.Task, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -39,6 +39,14 @@ func Load(path string) (domain.Task, error) {
 	d.KnownFields(true)
 	if err = d.Decode(&t); err != nil {
 		return domain.Task{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+	t.Version = domain.ConfigVersion
+	t.Task.Root, err = filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("resolve task root for %s: %w", path, err)
+	}
+	if t.Primary == "" && len(t.Repositories) > 0 {
+		t.Primary = t.Repositories[0].Name
 	}
 	if err = Validate(&t); err != nil {
 		return domain.Task{}, err
@@ -77,6 +85,9 @@ func stripLegacyOpenSpecField(raw []byte) ([]byte, error) {
 }
 
 func Validate(t *domain.Task) error {
+	if t.Version == 0 {
+		t.Version = domain.ConfigVersion
+	}
 	if t.Version != domain.ConfigVersion {
 		return fmt.Errorf("unsupported config version %d", t.Version)
 	}
@@ -96,6 +107,9 @@ func Validate(t *domain.Task) error {
 	t.Task.Root = root
 	if len(t.Repositories) == 0 {
 		return fmt.Errorf("at least one repository is required")
+	}
+	if t.Primary == "" {
+		t.Primary = t.Repositories[0].Name
 	}
 	seen := map[string]bool{}
 	primary := false
@@ -180,28 +194,16 @@ func validateDevelopment(development domain.Development) error {
 	if development.DefaultTool == "" {
 		return fmt.Errorf("development.default_tool is required")
 	}
-	enabled := map[string]bool{}
-	for _, name := range development.EnabledTools {
-		if enabled[name] {
-			return fmt.Errorf("duplicate enabled development tool %q", name)
-		}
-		enabled[name] = true
+	for name, def := range development.Tools {
 		if name != "codex" && name != "claude" {
 			return fmt.Errorf("unsupported development tool %q", name)
-		}
-		def, ok := development.Tools[name]
-		if !ok {
-			return fmt.Errorf("enabled development tool %q has no definition", name)
 		}
 		if strings.TrimSpace(def.Executable) == "" {
 			return fmt.Errorf("development tool %q executable is required", name)
 		}
-		if def.LaunchMode != "direct" {
-			return fmt.Errorf("development tool %q has unsupported launch mode %q", name, def.LaunchMode)
-		}
 	}
-	if !enabled[development.DefaultTool] {
-		return fmt.Errorf("development.default_tool %q is not enabled", development.DefaultTool)
+	if _, ok := development.Tools[development.DefaultTool]; !ok {
+		return fmt.Errorf("development.default_tool %q has no definition", development.DefaultTool)
 	}
 	return nil
 }

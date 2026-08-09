@@ -20,7 +20,7 @@ func TestInstallCreatesEverySkillForBothTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result) != len(targets) || len(names) != 1 || names[0] != "specflow" {
+	if len(result) != len(targets) || len(names) != 1 || names[0] != "taskflow" {
 		t.Fatalf("unexpected install result %#v, names %#v", result, names)
 	}
 	for _, target := range targets {
@@ -36,7 +36,7 @@ func TestInstallRejectsConflictWithoutChangingOtherTarget(t *testing.T) {
 	root := t.TempDir()
 	codexRoot := filepath.Join(root, "codex", "skills")
 	claudeRoot := filepath.Join(root, "claude", "skills")
-	conflict := filepath.Join(codexRoot, "specflow")
+	conflict := filepath.Join(codexRoot, "taskflow")
 	if err := os.MkdirAll(conflict, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestInstallRejectsConflictWithoutChangingOtherTarget(t *testing.T) {
 func TestInstallForceReplacesExistingSkill(t *testing.T) {
 	root := t.TempDir()
 	target := Target{Tool: "codex", Root: filepath.Join(root, "codex", "skills")}
-	conflict := filepath.Join(target.Root, "specflow")
+	conflict := filepath.Join(target.Root, "taskflow")
 	if err := os.MkdirAll(conflict, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -73,5 +73,47 @@ func TestInstallForceReplacesExistingSkill(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(conflict, "SKILL.md")); err != nil {
 		t.Fatalf("built-in skill absent: %v", err)
+	}
+}
+
+func TestInstallRejectsMissingTargets(t *testing.T) {
+	if _, err := Install(nil, false); err == nil {
+		t.Fatal("expected empty target error")
+	}
+	for _, target := range []Target{{Root: t.TempDir()}, {Tool: "codex"}} {
+		if _, err := Install([]Target{target}, false); err == nil {
+			t.Fatalf("expected invalid target error for %#v", target)
+		}
+	}
+}
+
+func TestCleanupStagesAndRollback(t *testing.T) {
+	root := t.TempDir()
+	stage := filepath.Join(root, "stage")
+	if err := os.Mkdir(stage, 0755); err != nil {
+		t.Fatal(err)
+	}
+	cleanupStages([]replacement{{stage: stage}})
+	if _, err := os.Stat(stage); !os.IsNotExist(err) {
+		t.Fatalf("stage was not cleaned: %v", err)
+	}
+
+	target := filepath.Join(root, "target")
+	backup := target + ".taskflow-backup"
+	if err := os.WriteFile(backup, []byte("backup"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rollback([]replacement{{target: target, backup: backup}})
+	if content, err := os.ReadFile(target); err != nil || string(content) != "backup" {
+		t.Fatalf("rollback target=%q err=%v", content, err)
+	}
+
+	plainTarget := filepath.Join(root, "plain")
+	if err := os.WriteFile(plainTarget, []byte("stale"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rollback([]replacement{{target: plainTarget}})
+	if _, err := os.Stat(plainTarget); !os.IsNotExist(err) {
+		t.Fatalf("plain target was not removed: %v", err)
 	}
 }

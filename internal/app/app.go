@@ -13,16 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenquan/specflow/internal/config"
-	"github.com/chenquan/specflow/internal/devtool"
-	"github.com/chenquan/specflow/internal/domain"
-	"github.com/chenquan/specflow/internal/execx"
-	"github.com/chenquan/specflow/internal/fsx"
-	"github.com/chenquan/specflow/internal/git"
-	"github.com/chenquan/specflow/internal/lock"
-	"github.com/chenquan/specflow/internal/plan"
-	"github.com/chenquan/specflow/internal/report"
-	"github.com/chenquan/specflow/internal/session"
+	"github.com/chenquan/taskflow/internal/config"
+	"github.com/chenquan/taskflow/internal/devtool"
+	"github.com/chenquan/taskflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/execx"
+	"github.com/chenquan/taskflow/internal/fsx"
+	"github.com/chenquan/taskflow/internal/git"
+	"github.com/chenquan/taskflow/internal/lock"
+	"github.com/chenquan/taskflow/internal/plan"
+	"github.com/chenquan/taskflow/internal/report"
 )
 
 type Service struct {
@@ -42,8 +41,8 @@ type InitOptions struct {
 
 func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report.ExitCode) {
 	res := report.New("init", o.TaskID)
-	if o.TasksRoot == "" || o.TaskID == "" || len(o.Repositories) == 0 || o.Primary == "" {
-		res.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "tasks root, task id, primary, and at least one --repo are required"})
+	if o.TasksRoot == "" || o.TaskID == "" || len(o.Repositories) == 0 {
+		res.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "tasks root, task id, and at least one --repo are required"})
 		return res, report.ExitConfig
 	}
 	if err := config.ValidateTaskID(o.TaskID); err != nil {
@@ -74,7 +73,11 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 		}
 		repos = append(repos, domain.Repository{Name: parts[0], Source: source, Worktree: filepath.Join("worktrees", parts[0])})
 	}
-	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Title: o.TaskID, Root: root}, Primary: o.Primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex", "claude"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}, "claude": {Executable: "claude", LaunchMode: "direct", LoadAdditionalInstructions: true}}}}
+	primary := o.Primary
+	if primary == "" {
+		primary = repos[0].Name
+	}
+	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: root}, Primary: primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}, "claude": {Executable: "claude", LoadAdditionalInstructions: true}}}}
 	if err = config.Validate(&t); err != nil {
 		res.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
 		return res, report.ExitConfig
@@ -103,7 +106,7 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 	entries, readErr := os.ReadDir(taskRoot)
 	if readErr == nil {
 		for _, entry := range entries {
-			if entry.Name() != ".specflow" {
+			if entry.Name() != ".taskflow" {
 				res.Fail(report.Diagnostic{Code: "UNMANAGED_TASK_DIRECTORY", Message: "task directory contains unmanaged files"})
 				return res, report.ExitConfig
 			}
@@ -127,10 +130,7 @@ func writeTask(t domain.Task, s Service, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = fsx.AtomicWrite(filepath.Join(root, "specflow.yaml"), raw, 0644); err != nil {
-		return err
-	}
-	if err = fsx.AtomicWrite(filepath.Join(root, "requirement.md"), []byte("# "+t.Task.ID+"\n\n"), 0644); err != nil {
+	if err = fsx.AtomicWrite(filepath.Join(root, "taskflow.yaml"), raw, 0644); err != nil {
 		return err
 	}
 	inv := domain.Inventory{SchemaVersion: 1, TaskID: t.Task.ID}
@@ -147,7 +147,7 @@ func writeTask(t domain.Task, s Service, ctx context.Context) error {
 		if e != nil {
 			return e
 		}
-		if e = fsx.AtomicWrite(filepath.Join(root, ".specflow", name), append(b, '\n'), 0644); e != nil {
+		if e = fsx.AtomicWrite(filepath.Join(root, ".taskflow", name), append(b, '\n'), 0644); e != nil {
 			return e
 		}
 	}
@@ -158,118 +158,6 @@ func (s Service) Load(tasksRoot, taskID string) (domain.Task, error) {
 		return domain.Task{}, err
 	}
 	return config.Load(config.Path(tasksRoot, taskID))
-}
-func (s Service) ConfigValidate(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
-	r := report.New("config validate", t.Task.ID)
-	for _, repository := range t.Repositories {
-		if _, err := s.Git.Inspect(ctx, repository.Source); err != nil {
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Repo: repository.Name, Message: "source is not a Git worktree: " + err.Error()})
-		}
-	}
-	r.Data = t
-	if len(r.Errors) > 0 {
-		return r, report.ExitConfig
-	}
-	return r, report.ExitOK
-}
-func (s Service) Doctor(ctx context.Context, t domain.Task, only string) (report.Result, report.ExitCode) {
-	res := report.New("doctor", t.Task.ID)
-	versions := map[string]string{}
-	if only != "" {
-		found := false
-		for _, r := range t.Repositories {
-			if r.Name == only {
-				found = true
-			}
-		}
-		if !found {
-			res.Fail(report.Diagnostic{Code: "UNKNOWN_REPOSITORY", Repo: only, Message: "repository is not configured"})
-			return res, report.ExitConfig
-		}
-	}
-	requiredTools := []string{"git"}
-	for _, tool := range requiredTools {
-		if _, err := s.Runner.LookPath(tool); err != nil {
-			res.Fail(report.Diagnostic{Code: "TOOL_NOT_FOUND", Message: tool + " is not executable"})
-			continue
-		}
-		versionArgs := []string{"--version"}
-		version, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: tool, Args: versionArgs})
-		if err != nil || strings.TrimSpace(version.Stdout) == "" {
-			res.Fail(report.Diagnostic{Code: "TOOL_VERSION_UNAVAILABLE", Message: tool + " version/capability probe failed"})
-		} else {
-			versions[tool] = strings.TrimSpace(version.Stdout)
-		}
-	}
-	for _, tool := range t.Development.EnabledTools {
-		def := t.Development.Tools[tool]
-		if def.Executable != "" {
-			if _, err := s.Runner.LookPath(def.Executable); err != nil {
-				res.Warn(report.Diagnostic{Code: "DEV_TOOL_NOT_FOUND", Message: def.Executable + " is not executable"})
-				continue
-			}
-			version, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: def.Executable, Args: []string{"--version"}})
-			if err != nil || strings.TrimSpace(version.Stdout) == "" {
-				res.Warn(report.Diagnostic{Code: "DEV_TOOL_VERSION_UNAVAILABLE", Message: def.Executable + " version probe failed"})
-			} else {
-				versions[tool] = strings.TrimSpace(version.Stdout)
-			}
-		}
-	}
-	for _, r := range t.Repositories {
-		if only != "" && only != r.Name {
-			continue
-		}
-		info, err := s.Git.Inspect(ctx, r.Source)
-		if err != nil {
-			res.Fail(report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: r.Name, Message: err.Error()})
-			continue
-		}
-		if info.Dirty {
-			res.Warn(report.Diagnostic{Code: "SOURCE_DIRTY", Repo: r.Name, Message: "source checkout has uncommitted changes"})
-		}
-		if !s.Git.HasRef(ctx, r.Source, r.Base) {
-			res.Fail(report.Diagnostic{Code: "BASE_REF_NOT_FOUND", Repo: r.Name, Message: "base ref " + r.Base + " does not exist", Hint: "fetch the remote or correct repositories[].base"})
-		}
-		target := filepath.Join(t.Task.Root, r.Worktree)
-		if !fsx.Within(filepath.Join(t.Task.Root, "worktrees"), target) {
-			res.Fail(report.Diagnostic{Code: "WORKTREE_PATH_UNSAFE", Repo: r.Name, Message: "worktree path escapes task worktrees"})
-		}
-		worktrees, err := s.Git.Worktrees(ctx, r.Source)
-		if err != nil {
-			res.Fail(report.Diagnostic{Code: "WORKTREE_INSPECTION_FAILED", Repo: r.Name, Message: err.Error()})
-		} else {
-			matched := false
-			for _, worktree := range worktrees {
-				if worktree.Branch == r.Branch && !samePath(worktree.Path, target) {
-					res.Fail(report.Diagnostic{Code: "BRANCH_OCCUPIED", Repo: r.Name, Message: fmt.Sprintf("branch %s is already checked out at %s", r.Branch, worktree.Path)})
-				}
-				if samePath(worktree.Path, target) {
-					matched = true
-					if worktree.Branch != r.Branch {
-						res.Fail(report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: r.Name, Message: fmt.Sprintf("target has branch %s, expected %s", worktree.Branch, r.Branch)})
-					}
-				}
-			}
-			if !matched {
-				if _, statErr := os.Stat(target); statErr == nil {
-					res.Fail(report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: r.Name, Message: "target exists but is not the configured worktree"})
-				} else if !os.IsNotExist(statErr) {
-					res.Fail(report.Diagnostic{Code: "WORKTREE_TARGET_UNREADABLE", Repo: r.Name, Message: statErr.Error()})
-				}
-			}
-		}
-		for _, c := range r.Checks {
-			if _, err := s.Runner.LookPath(c.Executable); err != nil {
-				res.Fail(report.Diagnostic{Code: "CHECK_NOT_FOUND", Repo: r.Name, Message: fmt.Sprintf("check %s executable %s is not available", c.Name, c.Executable)})
-			}
-		}
-	}
-	res.Data = map[string]any{"versions": versions}
-	if len(res.Errors) > 0 {
-		return res, report.ExitEnvironment
-	}
-	return res, report.ExitOK
 }
 
 type StartOptions struct {
@@ -305,30 +193,69 @@ func (s Service) Start(ctx context.Context, t domain.Task, o StartOptions) (repo
 		res.Fail(*diagnostic)
 		return res, code
 	}
+	digest, err := configDigest(t)
+	if err != nil {
+		res.Fail(report.Diagnostic{Code: "CONFIG_DIGEST_FAILED", Message: err.Error()})
+		return res, report.ExitExecution
+	}
+	state, exists, err := loadStartState(t)
+	if err != nil {
+		res.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()})
+		return res, report.ExitExecution
+	}
+	if exists && state.ConfigDigest != "" && state.ConfigDigest != digest {
+		res.Fail(report.Diagnostic{Code: "STATE_CONFLICT", Message: "persisted start state belongs to a different task configuration"})
+		return res, report.ExitConflict
+	}
 	now := time.Now().UTC()
-	state := domain.State{SchemaVersion: 1, TaskID: t.Task.ID, Phase: "starting", UpdatedAt: now, Directory: pendingOutcome(now), Repositories: map[string]domain.RepositoryState{}}
+	if !exists {
+		state = domain.State{SchemaVersion: 1, TaskID: t.Task.ID, Repositories: map[string]domain.RepositoryState{}}
+	}
+	state.SchemaVersion = 1
+	state.TaskID = t.Task.ID
+	state.ConfigDigest = digest
+	state.Phase = "starting"
+	state.UpdatedAt = now
+	if state.Repositories == nil {
+		state.Repositories = map[string]domain.RepositoryState{}
+	}
+	if info, statErr := os.Stat(filepath.Join(t.Task.Root, "worktrees")); statErr == nil && info.IsDir() {
+		state.Directory = completedOutcome()
+	} else {
+		state.Directory = pendingOutcome(now)
+	}
 	for _, repository := range t.Repositories {
-		actions := map[string]domain.ActionOutcome{"worktree": pendingOutcome(now)}
-		if t.Execution.Fetch {
-			actions["fetch"] = pendingOutcome(now)
-		} else {
-			actions["fetch"] = skippedOutcome(now)
+		value := state.Repositories[repository.Name]
+		if value.Actions == nil {
+			value.Actions = map[string]domain.ActionOutcome{}
 		}
-		state.Repositories[repository.Name] = domain.RepositoryState{Worktree: repository.Worktree, Actions: actions}
+		value.Worktree = repository.Worktree
+		if !t.Execution.Fetch {
+			value.Actions["fetch"] = skippedOutcome(now)
+		} else if value.Actions["fetch"].Status == "" {
+			value.Actions["fetch"] = pendingOutcome(now)
+		}
+		if value.Actions["worktree"].Status == "" {
+			value.Actions["worktree"] = pendingOutcome(now)
+		}
+		state.Repositories[repository.Name] = value
 	}
 	if err := persistState(t, state); err != nil {
 		res.Fail(report.Diagnostic{Code: "STATE_WRITE_FAILED", Message: err.Error()})
 		return res, report.ExitExecution
 	}
-	if err = os.MkdirAll(filepath.Join(t.Task.Root, "worktrees"), 0755); err != nil {
-		return startActionFailure(res, &state, t, "", "directory", err)
-	}
-	state.Directory = completedOutcome()
-	if err = persistState(t, state); err != nil {
-		return startActionFailure(res, &state, t, "", "directory", err)
+	if state.Directory.Status != domain.ActionCompleted {
+		if err = os.MkdirAll(filepath.Join(t.Task.Root, "worktrees"), 0755); err != nil {
+			return startActionFailure(res, &state, t, "", "directory", err)
+		}
+		state.Directory = completedOutcome()
+		if err = persistState(t, state); err != nil {
+			return startActionFailure(res, &state, t, "", "directory", err)
+		}
 	}
 	for _, repository := range ordered {
-		if t.Execution.Fetch {
+		value := state.Repositories[repository.Name]
+		if t.Execution.Fetch && (value.Actions["fetch"].Status != domain.ActionCompleted || !s.Git.HasRef(ctx, repository.Source, repository.Base)) {
 			remote := fetchRemote(repository.Base)
 			if !s.Git.RemoteExists(ctx, repository.Source, remote) && remote != "origin" && s.Git.RemoteExists(ctx, repository.Source, "origin") {
 				remote = "origin"
@@ -361,9 +288,11 @@ func (s Service) Start(ctx context.Context, t domain.Task, o StartOptions) (repo
 				return startActionFailure(res, &state, t, repository.Name, "worktree", err)
 			}
 		}
-		setAction(&state, repository.Name, "worktree", completedOutcome())
-		if err = persistState(t, state); err != nil {
-			return startActionFailure(res, &state, t, repository.Name, "worktree", err)
+		if state.Repositories[repository.Name].Actions["worktree"].Status != domain.ActionCompleted || matched {
+			setAction(&state, repository.Name, "worktree", completedOutcome())
+			if err = persistState(t, state); err != nil {
+				return startActionFailure(res, &state, t, repository.Name, "worktree", err)
+			}
 		}
 	}
 	state.Phase = "started"
@@ -521,7 +450,25 @@ func persistState(t domain.Task, s domain.State) error {
 	if e != nil {
 		return e
 	}
-	return fsx.AtomicWrite(filepath.Join(t.Task.Root, ".specflow", "state.json"), append(b, '\n'), 0644)
+	return fsx.AtomicWrite(filepath.Join(t.Task.Root, ".taskflow", "state.json"), append(b, '\n'), 0644)
+}
+
+func loadStartState(t domain.Task) (domain.State, bool, error) {
+	raw, err := os.ReadFile(filepath.Join(t.Task.Root, ".taskflow", "state.json"))
+	if os.IsNotExist(err) {
+		return domain.State{}, false, nil
+	}
+	if err != nil {
+		return domain.State{}, true, err
+	}
+	var state domain.State
+	if err = json.Unmarshal(raw, &state); err != nil {
+		return domain.State{}, true, fmt.Errorf("decode state: %w", err)
+	}
+	if state.SchemaVersion != 1 || state.TaskID != t.Task.ID {
+		return domain.State{}, true, fmt.Errorf("state schema or task ID is incompatible")
+	}
+	return state, true, nil
 }
 func samePath(a, b string) bool {
 	aa, e := filepath.Abs(a)
@@ -548,12 +495,6 @@ func (s Service) Open(ctx context.Context, t domain.Task, tool string, stdin io.
 		r.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: err.Error()})
 		return r, report.ExitConfig
 	}
-	holder, err := session.Acquire(t.Task.Root, tool, spec.Dir)
-	if err != nil {
-		r.Fail(report.Diagnostic{Code: "SESSION_CONFLICT", Message: err.Error()})
-		return r, report.ExitConflict
-	}
-	defer holder.Release()
 	res, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: spec.Executable, Args: spec.Args, Dir: spec.Dir, Stdin: stdin, Stdout: stdout, Stderr: stderr, Env: spec.Env})
 	if err != nil {
 		r.Data = map[string]any{"tool": tool, "executable": spec.Executable, "childExitCode": res.ExitCode}
@@ -566,16 +507,11 @@ func (s Service) Open(ctx context.Context, t domain.Task, tool string, stdin io.
 func (s Service) Status(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
 	r := report.New("status", t.Task.ID)
 	data := domain.StatusData{Phase: "unknown", Repositories: []domain.RepositoryStatus{}}
-	if b, e := os.ReadFile(filepath.Join(t.Task.Root, ".specflow", "state.json")); e == nil {
+	if b, e := os.ReadFile(filepath.Join(t.Task.Root, ".taskflow", "state.json")); e == nil {
 		var st domain.State
 		if json.Unmarshal(b, &st) == nil {
 			data.Phase = st.Phase
 		}
-	}
-	if lease, e := session.Active(t.Task.Root); e != nil {
-		r.Warn(report.Diagnostic{Code: "SESSION_READ_FAILED", Message: e.Error()})
-	} else {
-		data.ActiveSession = lease
 	}
 	validation, _ := loadValidationReport(t)
 	data.LastValidation = validation
@@ -682,65 +618,6 @@ func (s Service) validate(ctx context.Context, t domain.Task, only string) (repo
 	}
 	return r, report.ExitOK
 }
-func (s Service) Finish(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
-	r := report.New("finish", t.Task.ID)
-	statusResult, statusCode := s.Status(ctx, t)
-	status, ok := statusResult.Data.(domain.StatusData)
-	if !ok {
-		r.Fail(report.Diagnostic{Code: "STATUS_UNAVAILABLE", Message: "status data is unavailable"})
-		return r, statusCode
-	}
-	validation, validationErr := loadValidationReport(t)
-	ordered, _ := plan.Order(t.Repositories)
-	order := make([]string, 0, len(ordered))
-	for _, repository := range ordered {
-		order = append(order, repository.Name)
-	}
-	reverse := append([]string(nil), order...)
-	for left, right := 0, len(reverse)-1; left < right; left, right = left+1, right-1 {
-		reverse[left], reverse[right] = reverse[right], reverse[left]
-	}
-	data := domain.FinishData{Status: status, Validation: validation, ValidationOrder: order, MergeOrder: append([]string(nil), order...), ArchiveOrder: reverse, CleanupOrder: append([]string(nil), reverse...), Archive: "manual review required", Cleanup: "not executed"}
-	r.Data = data
-	r.Warnings = append(r.Warnings, report.Diagnostic{Code: "DRY_RUN_ONLY", Message: "finish only generates a report; no archive or cleanup was executed"})
-	if validationErr != nil {
-		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_MISSING", Message: validationErr.Error()})
-	} else if !validation.OK {
-		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_FAILED", Message: "the latest validation report failed"})
-	}
-	digest, digestErr := configDigest(t)
-	if validation != nil && digestErr == nil && validation.ConfigDigest != digest {
-		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_STALE", Message: "configuration changed after validation"})
-	}
-	if validation != nil && !sameScope(validation.Scope, order) {
-		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_STALE", Message: "finish requires a full-task validation report"})
-	}
-	for _, repository := range status.Repositories {
-		if repository.Error != "" {
-			r.Fail(report.Diagnostic{Code: "REPOSITORY_STATUS_FAILED", Repo: repository.Name, Message: repository.Error})
-		}
-		if repository.Dirty {
-			r.Fail(report.Diagnostic{Code: "DIRTY_WORKTREE", Repo: repository.Name, Message: "managed worktree has uncommitted changes"})
-		}
-		if validation != nil {
-			if repositoryValidation, found := validation.Repositories[repository.Name]; !found || repositoryValidation.Head != repository.Head {
-				r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_STALE", Repo: repository.Name, Message: "worktree HEAD changed after validation"})
-			}
-		}
-		if !repository.Pushed {
-			message := repository.Name + " branch is not fully pushed"
-			r.Warn(report.Diagnostic{Code: "BRANCH_NOT_PUSHED", Repo: repository.Name, Message: message})
-			data.CleanupBlockers = append(data.CleanupBlockers, message)
-		}
-	}
-	r.Data = data
-	r.OK = len(r.Errors) == 0
-	if !r.OK {
-		return r, report.ExitValidation
-	}
-	return r, report.ExitOK
-}
-
 func configDigest(task domain.Task) (string, error) {
 	raw, err := config.Marshal(task)
 	if err != nil {
@@ -751,7 +628,7 @@ func configDigest(task domain.Task) (string, error) {
 }
 
 func validationReportPath(task domain.Task) string {
-	return filepath.Join(task.Task.Root, ".specflow", "reports", "validation.json")
+	return filepath.Join(task.Task.Root, ".taskflow", "reports", "validation.json")
 }
 func persistValidationReport(task domain.Task, validation domain.ValidationReport) error {
 	raw, err := json.MarshalIndent(validation, "", "  ")
@@ -773,15 +650,4 @@ func loadValidationReport(task domain.Task) (*domain.ValidationReport, error) {
 		return nil, fmt.Errorf("validation report is incompatible")
 	}
 	return &validation, nil
-}
-func sameScope(actual, expected []string) bool {
-	if len(actual) != len(expected) {
-		return false
-	}
-	for index := range actual {
-		if actual[index] != expected[index] {
-			return false
-		}
-	}
-	return true
 }

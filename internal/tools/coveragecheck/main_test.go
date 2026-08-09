@@ -9,10 +9,10 @@ import (
 func TestCoverageMergesProfilesAndExcludesFixtures(t *testing.T) {
 	profile := filepath.Join(t.TempDir(), "coverage.out")
 	content := "mode: set\n" +
-		"github.com/chenquan/specflow/internal/app/app.go:1.1,2.1 2 0\n" +
-		"github.com/chenquan/specflow/internal/app/app.go:1.1,2.1 2 1\n" +
-		"github.com/chenquan/specflow/internal/app/app.go:3.1,4.1 2 0\n" +
-		"github.com/chenquan/specflow/internal/testfixture/main.go:1.1,2.1 100 0\n"
+		"github.com/chenquan/taskflow/internal/app/app.go:1.1,2.1 2 0\n" +
+		"github.com/chenquan/taskflow/internal/app/app.go:1.1,2.1 2 1\n" +
+		"github.com/chenquan/taskflow/internal/app/app.go:3.1,4.1 2 0\n" +
+		"github.com/chenquan/taskflow/internal/testfixture/main.go:1.1,2.1 100 0\n"
 	if err := os.WriteFile(profile, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}

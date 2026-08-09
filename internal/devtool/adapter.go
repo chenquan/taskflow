@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/chenquan/specflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/domain"
 )
 
 type LaunchSpec struct {
@@ -21,15 +21,9 @@ func (a AdapterImpl) Build(t domain.Task) (LaunchSpec, error) {
 	if a.Tool != "codex" && a.Tool != "claude" {
 		return LaunchSpec{}, fmt.Errorf("unsupported tool %s", a.Tool)
 	}
-	if !enabled(t.Development.EnabledTools, a.Tool) {
-		return LaunchSpec{}, fmt.Errorf("tool %s is not enabled", a.Tool)
-	}
 	definition, ok := t.Development.Tools[a.Tool]
 	if !ok || strings.TrimSpace(definition.Executable) == "" {
 		return LaunchSpec{}, fmt.Errorf("tool %s has no configured executable", a.Tool)
-	}
-	if definition.LaunchMode != "direct" {
-		return LaunchSpec{}, fmt.Errorf("tool %s has unsupported launch mode %s", a.Tool, definition.LaunchMode)
 	}
 	var primary string
 	for _, r := range t.Repositories {
@@ -59,14 +53,6 @@ func (a AdapterImpl) Build(t domain.Task) (LaunchSpec, error) {
 	return spec, nil
 }
 
-func enabled(enabledTools []string, tool string) bool {
-	for _, enabledTool := range enabledTools {
-		if enabledTool == tool {
-			return true
-		}
-	}
-	return false
-}
 func ApplyEnv(base []string, overlay []string) []string {
 	return append(append([]string{}, base...), overlay...)
 }

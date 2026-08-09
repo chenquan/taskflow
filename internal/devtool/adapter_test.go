@@ -1,56 +1,54 @@
 package devtool
 
 import (
-	"github.com/chenquan/specflow/internal/domain"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/chenquan/taskflow/internal/domain"
 )
 
 func TestLaunchSpecSafety(t *testing.T) {
-	task := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "a", Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a"}, {Name: "b", Worktree: "worktrees/b"}}, Development: domain.Development{EnabledTools: []string{"claude"}, Tools: map[string]domain.ToolDef{"claude": {Executable: "custom-claude", LaunchMode: "direct", LoadAdditionalInstructions: true}}}}
+	root := filepath.FromSlash("/tmp/task")
+	task := domain.Task{Task: domain.TaskInfo{Root: root}, Primary: "a", Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a"}, {Name: "b", Worktree: "worktrees/b"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"claude": {Executable: "custom-claude", LoadAdditionalInstructions: true}}}}
 	s, e := AdapterImpl{Tool: "claude"}.Build(task)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if s.Executable != "custom-claude" || s.Dir != "/tmp/task/worktrees/a" || len(s.Args) != 4 || !strings.Contains(strings.Join(s.Env, " "), "CLAUDE_CODE") {
+	if s.Executable != "custom-claude" || s.Dir != filepath.Join(root, "worktrees", "a") || len(s.Args) != 4 || !strings.Contains(strings.Join(s.Env, " "), "CLAUDE_CODE") {
 		t.Fatalf("%#v", s)
 	}
 }
 
 func TestCodexUsesConfiguredExecutableAndAdditionalDirectories(t *testing.T) {
-	task := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "owner", Repositories: []domain.Repository{{Name: "owner", Worktree: "worktrees/owner"}, {Name: "sdk", Worktree: "worktrees/sdk"}, {Name: "ui", Worktree: "worktrees/ui"}}, Development: domain.Development{EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "/opt/tools/custom-codex", LaunchMode: "direct"}}}}
+	root := filepath.FromSlash("/tmp/task")
+	task := domain.Task{Task: domain.TaskInfo{Root: root}, Primary: "owner", Repositories: []domain.Repository{{Name: "owner", Worktree: "worktrees/owner"}, {Name: "sdk", Worktree: "worktrees/sdk"}, {Name: "ui", Worktree: "worktrees/ui"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"codex": {Executable: "/opt/tools/custom-codex"}}}}
 	spec, err := (AdapterImpl{Tool: "codex"}).Build(task)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantArgs := []string{"--add-dir", "/tmp/task/worktrees/sdk", "--add-dir", "/tmp/task/worktrees/ui", "--add-dir", "/tmp/task"}
-	if spec.Executable != "/opt/tools/custom-codex" || spec.Dir != "/tmp/task/worktrees/owner" || !reflect.DeepEqual(spec.Args, wantArgs) {
+	wantArgs := []string{"--add-dir", filepath.Join(root, "worktrees", "sdk"), "--add-dir", filepath.Join(root, "worktrees", "ui"), "--add-dir", root}
+	if spec.Executable != "/opt/tools/custom-codex" || spec.Dir != filepath.Join(root, "worktrees", "owner") || !reflect.DeepEqual(spec.Args, wantArgs) {
 		t.Fatalf("%#v", spec)
 	}
 }
 
 func TestLaunchSpecRejectsInvalidPolicies(t *testing.T) {
-	base := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "repo", Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo"}}, Development: domain.Development{EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}}}}
+	root := filepath.FromSlash("/tmp/task")
+	base := domain.Task{Task: domain.TaskInfo{Root: root}, Primary: "repo", Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}}}
 	cases := []struct {
 		name string
 		tool string
 		edit func(*domain.Task)
 	}{
 		{name: "unsupported", tool: "other", edit: func(*domain.Task) {}},
-		{name: "disabled", tool: "claude", edit: func(task *domain.Task) {
-			task.Development.Tools["claude"] = domain.ToolDef{Executable: "claude", LaunchMode: "direct"}
-		}},
 		{name: "missing definition", tool: "codex", edit: func(task *domain.Task) { delete(task.Development.Tools, "codex") }},
-		{name: "unsupported mode", tool: "codex", edit: func(task *domain.Task) {
-			task.Development.Tools["codex"] = domain.ToolDef{Executable: "codex", LaunchMode: "shell"}
-		}},
 		{name: "missing primary", tool: "codex", edit: func(task *domain.Task) { task.Primary = "missing" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			task := base
-			task.Development.EnabledTools = append([]string(nil), base.Development.EnabledTools...)
 			task.Development.Tools = map[string]domain.ToolDef{"codex": base.Development.Tools["codex"]}
 			tc.edit(&task)
 			if _, err := (AdapterImpl{Tool: tc.tool}).Build(task); err == nil {

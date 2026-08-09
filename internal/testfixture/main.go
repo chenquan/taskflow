@@ -16,7 +16,7 @@ func main() {
 	switch name {
 	case "codex", "claude":
 		code = runTool(name, args)
-	case "specflow-e2e-check":
+	case "taskflow-e2e-check":
 		code = runCheck()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown fixture mode %q\n", name)
@@ -36,14 +36,14 @@ func runTool(name string, args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := appendLine(os.Getenv("SPECFLOW_E2E_TOOL_LOG"), strings.Join([]string{name, wd, additional, strings.Join(args, " ")}, "|")); err != nil {
+	if err := appendLine(os.Getenv("TASKFLOW_E2E_TOOL_LOG"), strings.Join([]string{name, wd, additional, strings.Join(args, " ")}, "|")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if exists(os.Getenv("SPECFLOW_E2E_TOOL_BLOCK")) && !waitForRelease(os.Getenv("SPECFLOW_E2E_TOOL_READY"), os.Getenv("SPECFLOW_E2E_TOOL_RELEASE")) {
+	if exists(os.Getenv("TASKFLOW_E2E_TOOL_BLOCK")) && !waitForRelease(os.Getenv("TASKFLOW_E2E_TOOL_READY"), os.Getenv("TASKFLOW_E2E_TOOL_RELEASE")) {
 		return 98
 	}
-	if raw := os.Getenv("SPECFLOW_E2E_TOOL_EXIT_CODE"); raw != "" {
+	if raw := os.Getenv("TASKFLOW_E2E_TOOL_EXIT_CODE"); raw != "" {
 		code, err := strconv.Atoi(raw)
 		if err != nil {
 			return 99
@@ -60,18 +60,18 @@ func runCheck() int {
 	if err != nil {
 		return 1
 	}
-	if err := appendLine(os.Getenv("SPECFLOW_E2E_CHECK_LOG"), wd); err != nil {
+	if err := appendLine(os.Getenv("TASKFLOW_E2E_CHECK_LOG"), wd); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if delay := os.Getenv("SPECFLOW_E2E_CHECK_DELAY"); delay != "" {
+	if delay := os.Getenv("TASKFLOW_E2E_CHECK_DELAY"); delay != "" {
 		d, err := time.ParseDuration(delay)
 		if err != nil {
 			return 99
 		}
 		time.Sleep(d)
 	}
-	if raw := os.Getenv("SPECFLOW_E2E_CHECK_EXIT_CODE"); raw != "" {
+	if raw := os.Getenv("TASKFLOW_E2E_CHECK_EXIT_CODE"); raw != "" {
 		code, err := strconv.Atoi(raw)
 		if err != nil {
 			return 99

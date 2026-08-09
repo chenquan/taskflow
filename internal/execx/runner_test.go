@@ -20,11 +20,11 @@ func runnerHelperSpec(t *testing.T, mode string, extra ...string) CommandSpec {
 	}
 	args := []string{"-test.run=TestRunnerHelperProcess", "--", mode}
 	args = append(args, extra...)
-	return CommandSpec{Executable: executable, Args: args, Env: []string{"SPECFLOW_RUNNER_HELPER=1"}}
+	return CommandSpec{Executable: executable, Args: args, Env: []string{"TASKFLOW_RUNNER_HELPER=1"}}
 }
 
 func TestRunnerHelperProcess(t *testing.T) {
-	if os.Getenv("SPECFLOW_RUNNER_HELPER") != "1" {
+	if os.Getenv("TASKFLOW_RUNNER_HELPER") != "1" {
 		return
 	}
 	separator := 0
@@ -39,7 +39,7 @@ func TestRunnerHelperProcess(t *testing.T) {
 	case "stdout":
 		fmt.Println("hello")
 	case "environment":
-		fmt.Println(os.Getenv("SPECFLOW_RUNNER_TEST"))
+		fmt.Println(os.Getenv("TASKFLOW_RUNNER_TEST"))
 	case "exit":
 		code, _ := strconv.Atoi(args[1])
 		os.Exit(code)
@@ -60,7 +60,7 @@ func TestRunStreamsWhenWriterProvided(t *testing.T) {
 }
 func TestRunAppliesEnvironmentOverlay(t *testing.T) {
 	spec := runnerHelperSpec(t, "environment")
-	spec.Env = append(spec.Env, "SPECFLOW_RUNNER_TEST=enabled")
+	spec.Env = append(spec.Env, "TASKFLOW_RUNNER_TEST=enabled")
 	r, err := (OSRunner{}).Run(context.Background(), spec)
 	if err != nil || strings.TrimSpace(r.Stdout) != "enabled" {
 		t.Fatalf("err=%v output=%q", err, r.Stdout)
@@ -88,5 +88,14 @@ func TestMergeEnvironmentOverridesDuplicateKeys(t *testing.T) {
 	windows := mergeEnvironment([]string{"Path=base", "A=base"}, []string{"PATH=overlay"}, true)
 	if !reflect.DeepEqual(windows, []string{"A=base", "PATH=overlay"}) {
 		t.Fatalf("windows=%v", windows)
+	}
+}
+
+func TestLookPath(t *testing.T) {
+	if path, err := (OSRunner{}).LookPath("go"); err != nil || path == "" {
+		t.Fatalf("go path=%q err=%v", path, err)
+	}
+	if _, err := (OSRunner{}).LookPath("taskflow-command-that-does-not-exist"); err == nil {
+		t.Fatal("expected missing executable error")
 	}
 }

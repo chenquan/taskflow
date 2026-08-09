@@ -18,13 +18,6 @@ Validation MUST run repository checks in topological dependency order.
 - **WHEN** YAML lists a dependent repository before its dependency
 - **THEN** validation executes the dependency check first
 
-### Requirement: Report and enforce task readiness state
-Status MUST include an active live session when present. Finish MUST treat dirty managed worktrees as blockers and return validation failure.
-
-#### Scenario: Dirty worktree on finish
-- **WHEN** a managed worktree has uncommitted changes
-- **THEN** finish emits a dirty-worktree error and exits with validation failure
-
 ### Requirement: Reject invalid check configuration
 Configuration validation MUST reject non-empty invalid check timeout values and non-lower-kebab-case change IDs.
 

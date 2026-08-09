@@ -1,4 +1,4 @@
-// Package skills contains the built-in agent skills distributed by SpecFlow.
+// Package skills contains the built-in agent skills distributed by Taskflow.
 package skills
 
 import (
@@ -12,7 +12,7 @@ import (
 
 // Files contains the complete built-in skill directories.
 //
-//go:embed all:specflow
+//go:embed all:taskflow
 var Files embed.FS
 
 type Target struct {
@@ -93,7 +93,7 @@ func Install(targets []Target, force bool) ([]InstallResult, error) {
 			return nil, fmt.Errorf("create %s skill root: %w", target.Tool, err)
 		}
 		for _, name := range names {
-			stage, err := os.MkdirTemp(target.Root, ".specflow-skill-")
+			stage, err := os.MkdirTemp(target.Root, ".taskflow-skill-")
 			if err != nil {
 				cleanupStages(replacements)
 				return nil, fmt.Errorf("stage %s skill %q: %w", target.Tool, name, err)
@@ -110,7 +110,7 @@ func Install(targets []Target, force bool) ([]InstallResult, error) {
 	for i := range replacements {
 		item := &replacements[i]
 		if _, err := os.Lstat(item.target); err == nil {
-			item.backup = item.target + ".specflow-backup"
+			item.backup = item.target + ".taskflow-backup"
 			if err := os.Rename(item.target, item.backup); err != nil {
 				rollback(replacements)
 				return nil, fmt.Errorf("backup existing skill %q: %w", item.target, err)

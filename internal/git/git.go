@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chenquan/specflow/internal/execx"
+	"github.com/chenquan/taskflow/internal/execx"
 )
 
 type Info struct {
@@ -137,6 +137,12 @@ func (c Client) Worktrees(ctx context.Context, path string) ([]Worktree, error) 
 	return result, nil
 }
 func (c Client) AddWorktree(ctx context.Context, source, branch, target, base string) error {
-	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", source, "worktree", "add", "-b", branch, target, base}})
+	args := []string{"-C", source, "worktree", "add"}
+	if c.HasRef(ctx, source, "refs/heads/"+branch) {
+		args = append(args, target, branch)
+	} else {
+		args = append(args, "-b", branch, target, base)
+	}
+	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: args})
 	return err
 }

@@ -15,7 +15,7 @@ limitations under the License.
 */
 package main
 
-import "github.com/chenquan/specflow/cmd"
+import "github.com/chenquan/taskflow/cmd"
 
 func main() {
 	cmd.Execute()
