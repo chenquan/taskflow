@@ -47,7 +47,7 @@ func (a AdapterImpl) Build(t domain.Task, extraArgs []string) (LaunchSpec, error
 		spec.Env = []string{"CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"}
 	}
 	for _, arg := range spec.Args {
-		if strings.Contains(arg, "dangerously") || arg == "--worktree" {
+		if arg == "--worktree" {
 			return LaunchSpec{}, fmt.Errorf("unsafe launch argument")
 		}
 	}

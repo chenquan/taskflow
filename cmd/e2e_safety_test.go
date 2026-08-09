@@ -379,7 +379,7 @@ func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 	}
 }
 
-func TestE2EOpenPassesThroughExtraArgsAndBlocksUnsafe(t *testing.T) {
+func TestE2EOpenPassesThroughExtraArgsAndPermissionBypass(t *testing.T) {
 	f := newSafetyFixture(t)
 	if out, err := runSafetyCobra(t, f.tasks, "init", "passthru", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
@@ -394,12 +394,11 @@ func TestE2EOpenPassesThroughExtraArgsAndBlocksUnsafe(t *testing.T) {
 	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], "--model gpt-5") {
 		t.Fatalf("extra args not forwarded to tool: %v", lines)
 	}
-	before := len(lines)
-	if out, err := runSafetyCobra(t, f.tasks, "open", "passthru", "--tool", "codex", "--", "--dangerously-skip-permissions"); err == nil || e2eCode(err) != int(report.ExitConfig) || !strings.Contains(out, "INVALID_ARGUMENT") {
-		t.Fatalf("unsafe args should be rejected: %v %s", err, out)
+	if out, err := runSafetyCobra(t, f.tasks, "open", "passthru", "--tool", "codex", "--", "--dangerously-skip-permissions"); err != nil || !strings.Contains(out, "open: ok") {
+		t.Fatalf("permission bypass argument should be forwarded: %v %s", err, out)
 	}
-	if got := safetyLog(t, f.toolLog); len(got) != before {
-		t.Fatalf("unsafe launch should not start the tool: %v", got)
+	if got := safetyLog(t, f.toolLog); len(got) != len(lines)+1 || !strings.Contains(got[len(got)-1], "--dangerously-skip-permissions") {
+		t.Fatalf("permission bypass argument was not forwarded: %v", got)
 	}
 }
 

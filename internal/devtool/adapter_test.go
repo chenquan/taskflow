@@ -66,7 +66,7 @@ func TestApplyEnvPreservesBaseAndOverlay(t *testing.T) {
 	}
 }
 
-func TestBuildAppendsExtraArgsAndRejectsUnsafe(t *testing.T) {
+func TestBuildAppendsExtraArgsAndAllowsPermissionBypass(t *testing.T) {
 	root := filepath.FromSlash("/tmp/task")
 	task := domain.Task{Task: domain.TaskInfo{Root: root}, Primary: "repo", Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}}}
 	spec, err := AdapterImpl{Tool: "codex"}.Build(task, []string{"--model", "gpt"})
@@ -77,7 +77,11 @@ func TestBuildAppendsExtraArgsAndRejectsUnsafe(t *testing.T) {
 	if last[0] != "--model" || last[1] != "gpt" {
 		t.Fatalf("extra args not appended: %#v", spec.Args)
 	}
-	if _, err := (AdapterImpl{Tool: "codex"}).Build(task, []string{"--dangerously-skip-permissions"}); err == nil {
-		t.Fatal("expected unsafe argument to be rejected")
+	spec, err = (AdapterImpl{Tool: "codex"}).Build(task, []string{"--dangerously-skip-permissions"})
+	if err != nil || len(spec.Args) != 4 || spec.Args[len(spec.Args)-1] != "--dangerously-skip-permissions" {
+		t.Fatalf("permission bypass argument should be forwarded: %#v, %v", spec, err)
+	}
+	if _, err := (AdapterImpl{Tool: "codex"}).Build(task, []string{"--worktree", "other"}); err == nil {
+		t.Fatal("expected nested worktree argument to be rejected")
 	}
 }
