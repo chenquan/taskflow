@@ -12,7 +12,7 @@ Commands supporting `--json` MUST emit valid JSON with `schemaVersion`, `command
 - **THEN** it emits a result envelope with `ok: false` and at least one structured error code, message, and optional repository and hint
 
 ### Requirement: Map expected failures to stable exit codes
-The CLI MUST use exit code 0 for success, 1 for execution failure including a launched child process that exits non-zero, 2 for argument or configuration errors, 3 for environment-preflight failure, 4 for partial completion after mutation begins, 5 for deterministic worktree/branch, task-lock, or source-branch-lock conflict, 6 for external-tool incompatibility, and 7 for validation failure. Child process exit values MUST be reported as structured data and MUST NOT replace the stable specflow exit code.
+The CLI MUST use exit code 0 for success, 1 for execution failure including a launched child process that exits non-zero, 2 for argument or configuration errors, 3 for environment-preflight failure, 4 for partial completion after mutation begins, 5 for deterministic worktree/branch, task-lock, or source-branch-lock conflict, 6 for external-tool incompatibility, and 7 for validation failure. Child process exit values MUST be reported as structured data and MUST NOT replace the stable taskflow exit code.
 
 #### Scenario: Return a lock conflict exit code
 - **WHEN** an initialization command cannot acquire its task lock

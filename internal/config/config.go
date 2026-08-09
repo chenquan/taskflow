@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenquan/specflow/internal/domain"
-	"github.com/chenquan/specflow/internal/fsx"
+	"github.com/chenquan/taskflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/fsx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,7 +24,7 @@ func ValidateTaskID(taskID string) error {
 	return nil
 }
 
-func Path(tasksRoot, taskID string) string { return filepath.Join(tasksRoot, taskID, "specflow.yaml") }
+func Path(tasksRoot, taskID string) string { return filepath.Join(tasksRoot, taskID, "taskflow.yaml") }
 func Load(path string) (domain.Task, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

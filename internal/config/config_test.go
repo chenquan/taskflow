@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/chenquan/specflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/domain"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +23,7 @@ func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "specflow.yaml")
+	path := filepath.Join(t.TempDir(), "taskflow.yaml")
 	legacy := strings.Replace(string(raw), "execution: {}", "execution:\n    create_openspec_change: true", 1)
 	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
 		t.Fatal(err)

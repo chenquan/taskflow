@@ -1,4 +1,0 @@
-interface:
-  display_name: "SpecFlow"
-  short_description: "Safely operate SpecFlow task workspaces"
-  default_prompt: "Use $specflow to safely prepare and operate this SpecFlow task."

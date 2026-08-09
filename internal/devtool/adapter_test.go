@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chenquan/specflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/domain"
 )
 
 func TestLaunchSpecSafety(t *testing.T) {

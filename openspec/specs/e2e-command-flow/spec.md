@@ -40,7 +40,7 @@ The test suite SHALL execute the user-facing task lifecycle through the Cobra co
 - **THEN** the CLI returns the documented structured failure and preserves existing files and managed state
 
 ### Requirement: Verify executable and rendering boundaries
-The test suite SHALL invoke a built `specflow` binary in addition to in-process Cobra commands and SHALL verify stable JSON/text output and process exit codes.
+The test suite SHALL invoke a built `taskflow` binary in addition to in-process Cobra commands and SHALL verify stable JSON/text output and process exit codes.
 
 #### Scenario: Subprocess reports a configuration failure
 - **WHEN** the built binary runs a command with an invalid task identifier in JSON mode

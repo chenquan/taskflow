@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chenquan/specflow/internal/config"
-	"github.com/chenquan/specflow/internal/domain"
-	"github.com/chenquan/specflow/internal/execx"
-	gitclient "github.com/chenquan/specflow/internal/git"
-	"github.com/chenquan/specflow/internal/lock"
-	"github.com/chenquan/specflow/internal/report"
+	"github.com/chenquan/taskflow/internal/config"
+	"github.com/chenquan/taskflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/execx"
+	gitclient "github.com/chenquan/taskflow/internal/git"
+	"github.com/chenquan/taskflow/internal/lock"
+	"github.com/chenquan/taskflow/internal/report"
 )
 
 type safetyFixture struct {
@@ -36,7 +36,7 @@ func newSafetyFixture(t *testing.T) safetyFixture {
 		t.Fatal(err)
 	}
 	fixture := buildFixture(t)
-	for _, name := range []string{"codex", "claude", "specflow-e2e-check"} {
+	for _, name := range []string{"codex", "claude", "taskflow-e2e-check"} {
 		if err := copyFixture(fixture, filepath.Join(bin, executableName(name))); err != nil {
 			t.Fatal(err)
 		}
@@ -44,8 +44,8 @@ func newSafetyFixture(t *testing.T) safetyFixture {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	checkLog := filepath.Join(root, "checks.log")
 	toolLog := filepath.Join(root, "tools.log")
-	t.Setenv("SPECFLOW_E2E_CHECK_LOG", checkLog)
-	t.Setenv("SPECFLOW_E2E_TOOL_LOG", toolLog)
+	t.Setenv("TASKFLOW_E2E_CHECK_LOG", checkLog)
+	t.Setenv("TASKFLOW_E2E_TOOL_LOG", toolLog)
 	return safetyFixture{root: root, bin: bin, tasks: tasks, repo: makeSafetyRepo(t, filepath.Join(root, "repo")), checkLog: checkLog, toolLog: toolLog}
 }
 
@@ -129,7 +129,7 @@ func decodeSafety(t *testing.T, out string) e2eResult {
 
 func mutateSafetyTask(t *testing.T, tasks, id string, fn func(*domain.Task)) {
 	t.Helper()
-	path := filepath.Join(tasks, id, "specflow.yaml")
+	path := filepath.Join(tasks, id, "taskflow.yaml")
 	task, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func mutateSafetyTask(t *testing.T, tasks, id string, fn func(*domain.Task)) {
 
 func safetyState(t *testing.T, tasks, id string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(tasks, id, ".specflow", "state.json"))
+	b, err := os.ReadFile(filepath.Join(tasks, id, ".taskflow", "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestE2EMultiRepositoryLifecycleAndReadiness(t *testing.T) {
 	mutateSafetyTask(t, f.tasks, "multi", func(task *domain.Task) {
 		for i := range task.Repositories {
 			r := &task.Repositories[i]
-			r.Checks = []domain.Check{{Name: r.Name, Executable: "specflow-e2e-check", Timeout: "2s"}}
+			r.Checks = []domain.Check{{Name: r.Name, Executable: "taskflow-e2e-check", Timeout: "2s"}}
 			if r.Name == "sdk" {
 				r.DependsOn = []string{"owner"}
 			}
@@ -292,26 +292,26 @@ func TestE2EValidation(t *testing.T) {
 		t.Fatal(out, err)
 	}
 	mutateSafetyTask(t, f.tasks, "checks", func(task *domain.Task) {
-		task.Repositories[0].Checks = []domain.Check{{Name: "check", Executable: "specflow-e2e-check", Timeout: "1s"}}
+		task.Repositories[0].Checks = []domain.Check{{Name: "check", Executable: "taskflow-e2e-check", Timeout: "1s"}}
 	})
 	if out, err := runSafetyCobra(t, f.tasks, "start", "checks", "--execute"); err != nil {
 		t.Fatal(out, err)
 	}
-	t.Setenv("SPECFLOW_E2E_CHECK_EXIT_CODE", "17")
+	t.Setenv("TASKFLOW_E2E_CHECK_EXIT_CODE", "17")
 	out, err := runSafetyCobra(t, f.tasks, "--json", "validate", "checks")
 	result := decodeSafety(t, out)
 	if e2eCode(err) != int(report.ExitValidation) || result.Errors[0].Code != "CHECK_FAILED" {
 		t.Fatalf("failed check: %d %#v", e2eCode(err), result)
 	}
-	t.Setenv("SPECFLOW_E2E_CHECK_EXIT_CODE", "")
+	t.Setenv("TASKFLOW_E2E_CHECK_EXIT_CODE", "")
 	mutateSafetyTask(t, f.tasks, "checks", func(task *domain.Task) { task.Repositories[0].Checks[0].Timeout = "20ms" })
-	t.Setenv("SPECFLOW_E2E_CHECK_DELAY", "100ms")
+	t.Setenv("TASKFLOW_E2E_CHECK_DELAY", "100ms")
 	out, err = runSafetyCobra(t, f.tasks, "--json", "validate", "checks")
 	result = decodeSafety(t, out)
 	if e2eCode(err) != int(report.ExitValidation) || result.Errors[0].Code != "CHECK_TIMEOUT" {
 		t.Fatalf("timeout: %d %#v", e2eCode(err), result)
 	}
-	t.Setenv("SPECFLOW_E2E_CHECK_DELAY", "")
+	t.Setenv("TASKFLOW_E2E_CHECK_DELAY", "")
 	if out, err := runSafetyCobra(t, f.tasks, "validate", "checks"); err != nil {
 		t.Fatal(out, err)
 	}
@@ -356,12 +356,12 @@ func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 	if out, err := runSafetyCobra(t, f.tasks, "open", "tools", "--tool", "claude"); err != nil || !strings.Contains(out, "open: ok") {
 		t.Fatalf("open success: %v %s", err, out)
 	}
-	t.Setenv("SPECFLOW_E2E_TOOL_EXIT_CODE", "12")
+	t.Setenv("TASKFLOW_E2E_TOOL_EXIT_CODE", "12")
 	out, err = runSafetyCobra(t, f.tasks, "--json", "open", "tools", "--tool", "codex")
 	if e2eCode(err) != int(report.ExitExecution) || !strings.Contains(out, "TOOL_EXITED") {
 		t.Fatalf("open failure: %d %s", e2eCode(err), out)
 	}
-	t.Setenv("SPECFLOW_E2E_TOOL_EXIT_CODE", "")
+	t.Setenv("TASKFLOW_E2E_TOOL_EXIT_CODE", "")
 	if out, err := runSafetyCobra(t, f.tasks, "open", "tools", "--tool", "codex"); err != nil || !strings.Contains(out, "open: ok") {
 		t.Fatalf("tool relaunch: %v %s", err, out)
 	}
@@ -430,7 +430,7 @@ func TestE2EResumesCompletedActionsAndRejectsIncompatibleState(t *testing.T) {
 	}
 
 	corrupt := []byte("{not-json\n")
-	statePath := filepath.Join(f.tasks, "resume", ".specflow", "state.json")
+	statePath := filepath.Join(f.tasks, "resume", ".taskflow", "state.json")
 	if err := os.WriteFile(statePath, corrupt, 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +486,7 @@ func TestE2ECommandArgumentGuards(t *testing.T) {
 func TestE2ECompiledBinaryAndInvalidJSON(t *testing.T) {
 	f := newSafetyFixture(t)
 	_, file, _, _ := runtime.Caller(0)
-	binary := filepath.Join(t.TempDir(), executableName("specflow"))
+	binary := filepath.Join(t.TempDir(), executableName("taskflow"))
 	cmd := exec.Command("go", "build", "-o", binary, ".")
 	cmd.Dir = filepath.Dir(filepath.Dir(file))
 	if out, err := cmd.CombinedOutput(); err != nil {

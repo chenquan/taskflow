@@ -25,12 +25,12 @@ func TestLifecycleRunsWithoutOpenSpec(t *testing.T) {
 		root.SetErr(&output)
 		root.SetArgs(append([]string{"--tasks-root", tasks}, args...))
 		if err := root.Execute(); err != nil {
-			t.Fatalf("specflow %v: %v: %s", args, err, output.String())
+			t.Fatalf("taskflow %v: %v: %s", args, err, output.String())
 		}
 		return output.String()
 	}
 	run("init", "task", "--primary", "repo", "--repo", "repo="+repo)
-	raw, err := os.ReadFile(filepath.Join(tasks, "task", "specflow.yaml"))
+	raw, err := os.ReadFile(filepath.Join(tasks, "task", "taskflow.yaml"))
 	if err != nil || strings.Contains(string(raw), "openspec") {
 		t.Fatalf("OpenSpec leaked into task configuration: %s (%v)", raw, err)
 	}

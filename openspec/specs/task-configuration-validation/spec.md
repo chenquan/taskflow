@@ -5,7 +5,7 @@ Define the strict task configuration contract and normalization rules.
 ## Requirements
 
 ### Requirement: Load a strict task configuration
-The CLI MUST decode `specflow.yaml` with unknown fields rejected, apply the current internal configuration version when omitted, normalize source paths to absolute paths, derive the task root from the task workspace path, and use the first repository as primary when no primary is specified.
+The CLI MUST decode `taskflow.yaml` with unknown fields rejected, apply the current internal configuration version when omitted, normalize source paths to absolute paths, derive the task root from the task workspace path, and use the first repository as primary when no primary is specified.
 
 #### Scenario: Reject an unknown YAML field
 - **WHEN** a task configuration contains an unrecognized field

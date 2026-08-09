@@ -13,15 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenquan/specflow/internal/config"
-	"github.com/chenquan/specflow/internal/devtool"
-	"github.com/chenquan/specflow/internal/domain"
-	"github.com/chenquan/specflow/internal/execx"
-	"github.com/chenquan/specflow/internal/fsx"
-	"github.com/chenquan/specflow/internal/git"
-	"github.com/chenquan/specflow/internal/lock"
-	"github.com/chenquan/specflow/internal/plan"
-	"github.com/chenquan/specflow/internal/report"
+	"github.com/chenquan/taskflow/internal/config"
+	"github.com/chenquan/taskflow/internal/devtool"
+	"github.com/chenquan/taskflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/execx"
+	"github.com/chenquan/taskflow/internal/fsx"
+	"github.com/chenquan/taskflow/internal/git"
+	"github.com/chenquan/taskflow/internal/lock"
+	"github.com/chenquan/taskflow/internal/plan"
+	"github.com/chenquan/taskflow/internal/report"
 )
 
 type Service struct {
@@ -106,7 +106,7 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 	entries, readErr := os.ReadDir(taskRoot)
 	if readErr == nil {
 		for _, entry := range entries {
-			if entry.Name() != ".specflow" {
+			if entry.Name() != ".taskflow" {
 				res.Fail(report.Diagnostic{Code: "UNMANAGED_TASK_DIRECTORY", Message: "task directory contains unmanaged files"})
 				return res, report.ExitConfig
 			}
@@ -130,7 +130,7 @@ func writeTask(t domain.Task, s Service, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = fsx.AtomicWrite(filepath.Join(root, "specflow.yaml"), raw, 0644); err != nil {
+	if err = fsx.AtomicWrite(filepath.Join(root, "taskflow.yaml"), raw, 0644); err != nil {
 		return err
 	}
 	inv := domain.Inventory{SchemaVersion: 1, TaskID: t.Task.ID}
@@ -147,7 +147,7 @@ func writeTask(t domain.Task, s Service, ctx context.Context) error {
 		if e != nil {
 			return e
 		}
-		if e = fsx.AtomicWrite(filepath.Join(root, ".specflow", name), append(b, '\n'), 0644); e != nil {
+		if e = fsx.AtomicWrite(filepath.Join(root, ".taskflow", name), append(b, '\n'), 0644); e != nil {
 			return e
 		}
 	}
@@ -450,11 +450,11 @@ func persistState(t domain.Task, s domain.State) error {
 	if e != nil {
 		return e
 	}
-	return fsx.AtomicWrite(filepath.Join(t.Task.Root, ".specflow", "state.json"), append(b, '\n'), 0644)
+	return fsx.AtomicWrite(filepath.Join(t.Task.Root, ".taskflow", "state.json"), append(b, '\n'), 0644)
 }
 
 func loadStartState(t domain.Task) (domain.State, bool, error) {
-	raw, err := os.ReadFile(filepath.Join(t.Task.Root, ".specflow", "state.json"))
+	raw, err := os.ReadFile(filepath.Join(t.Task.Root, ".taskflow", "state.json"))
 	if os.IsNotExist(err) {
 		return domain.State{}, false, nil
 	}
@@ -507,7 +507,7 @@ func (s Service) Open(ctx context.Context, t domain.Task, tool string, stdin io.
 func (s Service) Status(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
 	r := report.New("status", t.Task.ID)
 	data := domain.StatusData{Phase: "unknown", Repositories: []domain.RepositoryStatus{}}
-	if b, e := os.ReadFile(filepath.Join(t.Task.Root, ".specflow", "state.json")); e == nil {
+	if b, e := os.ReadFile(filepath.Join(t.Task.Root, ".taskflow", "state.json")); e == nil {
 		var st domain.State
 		if json.Unmarshal(b, &st) == nil {
 			data.Phase = st.Phase
@@ -628,7 +628,7 @@ func configDigest(task domain.Task) (string, error) {
 }
 
 func validationReportPath(task domain.Task) string {
-	return filepath.Join(task.Task.Root, ".specflow", "reports", "validation.json")
+	return filepath.Join(task.Task.Root, ".taskflow", "reports", "validation.json")
 }
 func persistValidationReport(task domain.Task, validation domain.ValidationReport) error {
 	raw, err := json.MarshalIndent(validation, "", "  ")

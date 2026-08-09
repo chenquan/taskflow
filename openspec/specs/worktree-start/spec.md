@@ -5,7 +5,7 @@ Define complete dry-run planning and safe, idempotent managed worktree creation.
 ## Requirements
 
 ### Requirement: Plan a complete start operation
-The CLI SHALL provide `specflow start <task-id> --dry-run` and list directory, fetch (when configured), worktree, and OpenSpec change actions in dependency order before execution. Dry-run MUST not modify files, Git state, or OpenSpec state.
+The CLI SHALL provide `taskflow start <task-id> --dry-run` and list directory, fetch (when configured), worktree, and OpenSpec change actions in dependency order before execution. Dry-run MUST not modify files, Git state, or OpenSpec state.
 
 #### Scenario: Dry-run three repositories
 - **WHEN** a valid task has three repositories and the user requests dry-run

@@ -56,7 +56,7 @@ func AtomicWrite(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".specflow-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".taskflow-*")
 	if err != nil {
 		return err
 	}

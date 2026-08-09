@@ -12,10 +12,10 @@ import (
 type Lock struct{ f *flock.Flock }
 
 func Acquire(taskRoot string) (*Lock, error) {
-	if err := os.MkdirAll(filepath.Join(taskRoot, ".specflow"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(taskRoot, ".taskflow"), 0755); err != nil {
 		return nil, err
 	}
-	f := flock.New(filepath.Join(taskRoot, ".specflow", "lock"))
+	f := flock.New(filepath.Join(taskRoot, ".taskflow", "lock"))
 	ok, err := f.TryLock()
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func AcquireSource(commonDir, branch string) (*Lock, error) {
 		return nil, fmt.Errorf("source lock requires common Git directory and branch")
 	}
 	digest := sha256.Sum256([]byte(commonDir + "\x00" + branch))
-	directory := filepath.Join(commonDir, "specflow-locks")
+	directory := filepath.Join(commonDir, "taskflow-locks")
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		return nil, err
 	}

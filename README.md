@@ -1,15 +1,16 @@
-# Specflow
+# Taskflow
 
-Specflow 是一个面向多 Git 仓库任务的本地开发编排 CLI，负责创建需求工作区、检查仓库环境、隔离 Git worktree、启动开发工具、执行验证命令，并在完成前生成安全检查报告。
+Taskflow 是一个面向 AI 编程的多 Git 仓库开发工作区编排 CLI。它为 Codex、Claude Code 等 AI 编程工具准备隔离的 worktree，管理跨仓库任务上下文，执行安全检查和项目验证，让 AI 可以在受控工作区内完成真实代码修改。
 
-Specflow 不会自动提交代码、推送分支、创建 PR、合并分支或删除 worktree；这些高风险操作由用户根据各仓库流程手动完成。
+Taskflow 不会自动提交代码、推送分支、创建 PR、合并分支或删除 worktree；这些高风险操作由用户根据各仓库流程手动完成。
 
 ## 特性
 
 - 一个任务关联多个本地 Git 仓库
 - 使用 Git worktree 隔离任务开发环境
 - 支持仓库依赖关系和拓扑执行顺序
-- 支持 Codex、Claude 等开发工具
+- 面向 Codex、Claude Code 等 AI 编程工具提供统一工作区
+- 为 AI 编程提供跨仓库上下文、依赖顺序和额外目录访问
 - 支持 dry-run、任务锁、源分支锁和幂等执行
 - 支持验证命令、超时控制和验证报告
 - 支持文本和 JSON 输出
@@ -23,16 +24,16 @@ Specflow 不会自动提交代码、推送分支、创建 PR、合并分支或�
 
 ## 安装操作 Skill
 
-Specflow 内置了用于操作任务工作区的 `specflow` skill。安装到当前用户的 Codex 与 Claude Code：
+Taskflow 内置了用于指导 AI 编程代理操作任务工作区的 `taskflow` skill。安装到当前用户的 Codex 与 Claude Code：
 
 ```bash
-specflow skill install
+taskflow skill install
 ```
 
 安装到当前项目（`./.codex/skills` 与 `./.claude/skills`）：
 
 ```bash
-specflow skill install --project
+taskflow skill install --project
 ```
 
 默认不会覆盖同名 skill；确认需要替换时加 `--force`。
@@ -40,15 +41,15 @@ specflow skill install --project
 ## 安装
 
 ```bash
-go install github.com/chenquan/specflow@latest
+go install github.com/chenquan/taskflow@latest
 ```
 
 或从源码构建：
 
 ```bash
-git clone https://github.com/chenquan/specflow.git
+git clone https://github.com/chenquan/taskflow.git
 cd specflow
-go build -o specflow .
+go build -o taskflow .
 ```
 
 ## 快速开始
@@ -58,7 +59,7 @@ go build -o specflow .
 创建任务：
 
 ```bash
-specflow --tasks-root ~/tasks init REFUND-123 \
+taskflow --tasks-root ~/tasks init REFUND-123 \
   --primary order-service \
   --repo order-service=~/projects/order-service \
   --repo payment-sdk=~/projects/payment-sdk
@@ -67,24 +68,24 @@ specflow --tasks-root ~/tasks init REFUND-123 \
 预览并创建开发环境：
 
 ```bash
-specflow --tasks-root ~/tasks start REFUND-123 --dry-run
-specflow --tasks-root ~/tasks start REFUND-123 --execute
+taskflow --tasks-root ~/tasks start REFUND-123 --dry-run
+taskflow --tasks-root ~/tasks start REFUND-123 --execute
 ```
 
-启动开发工具、查看状态并执行验证：
+启动 AI 编程工具、查看状态并执行验证：
 
 ```bash
-specflow --tasks-root ~/tasks open REFUND-123 --tool codex
-specflow --tasks-root ~/tasks status REFUND-123
-specflow --tasks-root ~/tasks validate REFUND-123
+taskflow --tasks-root ~/tasks open REFUND-123 --tool codex
+taskflow --tasks-root ~/tasks status REFUND-123
+taskflow --tasks-root ~/tasks validate REFUND-123
 ```
 
 ## 任务目录
 
 ```text
 ~/tasks/REFUND-123/
-├── specflow.yaml
-├── .specflow/
+├── taskflow.yaml
+├── .taskflow/
 │   ├── inventory.json
 │   ├── state.json
 │   └── reports/
@@ -144,7 +145,7 @@ execution:
 ## JSON 输出
 
 ```bash
-specflow --json --tasks-root ~/tasks status REFUND-123
+taskflow --json --tasks-root ~/tasks status REFUND-123
 ```
 
 失败命令会返回非零退出码，并在 JSON 中提供错误代码。

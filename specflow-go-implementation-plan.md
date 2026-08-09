@@ -1,11 +1,11 @@
-# Specflow：Go 语言多仓库 OpenSpec 开发编排方案
+# Taskflow：Go 语言多仓库 OpenSpec 开发编排方案
 
 > 面向“单个需求、多 Git 仓库、每仓库独立 OpenSpec、Git Worktree、Codex CLI 与 Claude Code”的可实现技术规格
 
 - 文档版本：2.1
 - 状态：核心生命周期已实现并加固
 - 实现语言：Go
-- CLI 名称：`specflow`
+- CLI 名称：`taskflow`
 - AI Skill 名称：`openspec-multirepo`
 - 配置格式：YAML
 
@@ -16,14 +16,14 @@
 | 层 | 职责 |
 |---|---|
 | 各业务仓库 OpenSpec | 保存本仓库规格、设计、任务、验证和归档历史 |
-| Go CLI `specflow` | 管理需求目录、仓库关联、worktree、状态、验证、工具启动和安全门禁 |
+| Go CLI `taskflow` | 管理需求目录、仓库关联、worktree、状态、验证、工具启动和安全门禁 |
 | `openspec-multirepo` Skill | 理解自然语言需求、选择仓库、划分职责、生成配置、编排 OpenSpec 工作流 |
 
 基本原则：
 
 > AI 负责语义判断；Go CLI 负责确定性执行；Git Worktree 负责代码隔离；每个仓库的 OpenSpec 仍是该仓库的规格事实来源。
 
-`specflow` 不直接调用 OpenAI 或 Anthropic API。Codex 和 Claude Code 均通过独立的开发工具 Adapter 启动，共享同一需求工作区，但不允许同时写入同一组 worktree。
+`taskflow` 不直接调用 OpenAI 或 Anthropic API。Codex 和 Claude Code 均通过独立的开发工具 Adapter 启动，共享同一需求工作区，但不允许同时写入同一组 worktree。
 
 ## 2. 目标与非目标
 
@@ -41,7 +41,7 @@
 ### 2.2 非目标
 
 - 不合并各仓库的 `openspec/`。
-- 不把 `specflow.yaml` 变成第四套业务规格。
+- 不把 `taskflow.yaml` 变成第四套业务规格。
 - 不提供跨仓库原子提交、原子归档或原子发布。
 - 不自动决定最终业务协议所有者；AI 可建议，用户必须可确认。
 - MVP 不自动 commit、push、创建 PR、合并或删除分支。
@@ -54,7 +54,7 @@
 显式指定仓库：
 
 ```bash
-specflow init REFUND-123 \
+taskflow init REFUND-123 \
   --root ~/tasks \
   --repo order-service=~/projects/order-service \
   --repo payment-sdk=~/projects/payment-sdk \
@@ -65,7 +65,7 @@ specflow init REFUND-123 \
 或者扫描候选目录并交互选择：
 
 ```bash
-specflow init REFUND-123 --root ~/tasks --scan ~/projects
+taskflow init REFUND-123 --root ~/tasks --scan ~/projects
 ```
 
 `init` 只做低风险操作：
@@ -73,7 +73,7 @@ specflow init REFUND-123 --root ~/tasks --scan ~/projects
 1. 创建需求控制目录。
 2. 校验并记录仓库的规范绝对路径。
 3. 读取仓库名称、Git 根、远端、默认分支和 OpenSpec 状态。
-4. 生成 `requirement.md`、`specflow.yaml`、`inventory.json` 和 `state.json`。
+4. 生成 `requirement.md`、`taskflow.yaml`、`inventory.json` 和 `state.json`。
 5. 不创建分支、worktree 或 OpenSpec Change。
 
 这样即使 AI 选择错仓库，也只需要修改配置，不需要清理 Git 状态。
@@ -92,18 +92,18 @@ specflow init REFUND-123 --root ~/tasks --scan ~/projects
 /openspec-multirepo 分析 REFUND-123，完善仓库职责、依赖关系、Change ID 和验证命令，暂不创建 worktree
 ```
 
-AI 修改 `specflow.yaml`，并把推断依据写入 `.specflow/inference-report.md`。CLI 不信任 AI 输出，必须再次执行：
+AI 修改 `taskflow.yaml`，并把推断依据写入 `.taskflow/inference-report.md`。CLI 不信任 AI 输出，必须再次执行：
 
 ```bash
-specflow config validate REFUND-123
-specflow doctor REFUND-123
+taskflow config validate REFUND-123
+taskflow doctor REFUND-123
 ```
 
 ### 3.3 第三步：创建开发环境
 
 ```bash
-specflow start REFUND-123 --dry-run
-specflow start REFUND-123 --execute
+taskflow start REFUND-123 --dry-run
+taskflow start REFUND-123 --execute
 ```
 
 `start` 执行：
@@ -118,28 +118,28 @@ specflow start REFUND-123 --execute
 ### 3.4 第四步：选择开发工具
 
 ```bash
-specflow open REFUND-123 --tool codex
+taskflow open REFUND-123 --tool codex
 ```
 
 或：
 
 ```bash
-specflow open REFUND-123 --tool claude
+taskflow open REFUND-123 --tool claude
 ```
 
 也可将默认工具写入配置后直接执行：
 
 ```bash
-specflow open REFUND-123
+taskflow open REFUND-123
 ```
 
 ### 3.5 开发中与完成前
 
 ```bash
-specflow status REFUND-123
-specflow validate REFUND-123
-specflow validate REFUND-123 --repo payment-sdk
-specflow finish REFUND-123 --dry-run
+taskflow status REFUND-123
+taskflow validate REFUND-123
+taskflow validate REFUND-123 --repo payment-sdk
+taskflow finish REFUND-123 --dry-run
 ```
 
 MVP 中 `finish` 只给出归档、合并和清理检查报告，不自动执行破坏性动作。
@@ -149,8 +149,8 @@ MVP 中 `finish` 只给出归档、合并和清理检查报告，不自动执行
 ```text
 ~/tasks/REFUND-123/
 ├── requirement.md
-├── specflow.yaml
-├── .specflow/
+├── taskflow.yaml
+├── .taskflow/
 │   ├── inventory.json
 │   ├── state.json
 │   ├── inference-report.md
@@ -171,7 +171,7 @@ MVP 中 `finish` 只给出归档、合并和清理检查报告，不自动执行
 - 需求根目录不是业务仓库。
 - 不使用符号链接关联仓库；配置中记录规范绝对路径。
 - `worktrees/<repo>` 是唯一受管工作目录。
-- `.specflow/` 只保存机器状态、报告和锁，不保存业务规格。
+- `.taskflow/` 只保存机器状态、报告和锁，不保存业务规格。
 - 业务规格只能写入相应仓库的 `openspec/`。
 
 ## 5. 配置协议
@@ -297,15 +297,15 @@ AI 不应自行决定：
 ### 6.1 命令总览
 
 ```text
-specflow init <task-id>
-specflow config show <task-id>
-specflow config validate <task-id>
-specflow doctor <task-id>
-specflow start <task-id> [--dry-run|--execute]
-specflow open <task-id> [--tool codex|claude]
-specflow status <task-id> [--json]
-specflow validate <task-id> [--repo <name>] [--json]
-specflow finish <task-id> --dry-run
+taskflow init <task-id>
+taskflow config show <task-id>
+taskflow config validate <task-id>
+taskflow doctor <task-id>
+taskflow start <task-id> [--dry-run|--execute]
+taskflow open <task-id> [--tool codex|claude]
+taskflow status <task-id> [--json]
+taskflow validate <task-id> [--repo <name>] [--json]
+taskflow finish <task-id> --dry-run
 ```
 
 全局参数：
@@ -381,8 +381,8 @@ CREATE CHANGE   refund-123-payment-sdk
 - 子进程继承 stdin/stdout/stderr。
 - 主 worktree 作为 cwd。
 - 其他 worktree 与任务根作为附加目录。
-- 子进程退出后释放会话租约。specflow 固定返回执行错误码 1，并在结果数据的
-  `childExitCode` 中保留开发工具的真实退出码，避免与 specflow 的 0-7 协议冲突。
+- 子进程退出后释放会话租约。taskflow 固定返回执行错误码 1，并在结果数据的
+  `childExitCode` 中保留开发工具的真实退出码，避免与 taskflow 的 0-7 协议冲突。
 - 同一任务已有活动开发会话时拒绝启动第二个写会话。
 - 不自动添加任何危险权限参数。
 
@@ -430,10 +430,10 @@ Git 和 OpenSpec 当前事实生成依赖优先的合并顺序与反向归档/�
 第二阶段再增加：
 
 ```bash
-specflow archive REFUND-123 --dry-run
-specflow archive REFUND-123 --execute
-specflow cleanup REFUND-123 --dry-run
-specflow cleanup REFUND-123 --execute
+taskflow archive REFUND-123 --dry-run
+taskflow archive REFUND-123 --execute
+taskflow cleanup REFUND-123 --dry-run
+taskflow cleanup REFUND-123 --execute
 ```
 
 ## 7. Go 工程设计
@@ -461,7 +461,7 @@ specflow cleanup REFUND-123 --execute
 ### 7.2 项目结构
 
 ```text
-specflow/
+taskflow/
 ├── cmd/                 # Cobra 命令、输出协议和端到端测试
 ├── internal/
 │   ├── app/              # 用例编排
@@ -610,7 +610,7 @@ git -C <source> worktree add -b <branch> <target> <base>
 
 ### 8.3 不复制密钥文件
 
-`specflow` 不自动复制 `.env`、密钥或 gitignored 文件。团队若需要，应采用显式钩子或仓库自有的安全 bootstrap 命令；该命令需要进入预演报告。
+`taskflow` 不自动复制 `.env`、密钥或 gitignored 文件。团队若需要，应采用显式钩子或仓库自有的安全 bootstrap 命令；该命令需要进入预演报告。
 
 ## 9. OpenSpec 集成
 
@@ -633,12 +633,12 @@ OpenSpec 命令和 JSON 结构可能演进，因此 Adapter 应：
 若仓库未初始化 OpenSpec，`doctor` 默认报错。可额外提供：
 
 ```bash
-specflow bootstrap-openspec REFUND-123 --tools codex,claude --dry-run
+taskflow bootstrap-openspec REFUND-123 --tools codex,claude --dry-run
 ```
 
 但不应把初始化静默塞入 `start`。
 
-OpenSpec 当前对 Codex 使用 `.agents/skills/openspec-*/SKILL.md`，对 Claude Code 使用 `.claude/skills/openspec-*/SKILL.md` 和 `.claude/commands/opsx/`。实现时应调用 OpenSpec 自身初始化/更新流程，不由 `specflow` 复制其生成文件。
+OpenSpec 当前对 Codex 使用 `.agents/skills/openspec-*/SKILL.md`，对 Claude Code 使用 `.claude/skills/openspec-*/SKILL.md` 和 `.claude/commands/opsx/`。实现时应调用 OpenSpec 自身初始化/更新流程，不由 `taskflow` 复制其生成文件。
 
 ## 10. Codex 与 Claude Code Adapter
 
@@ -686,7 +686,7 @@ Claude Code 的 `--add-dir` 可以授权额外目录，但默认不会加载这�
 - `--allow-dangerously-skip-permissions`；
 - `--worktree`。
 
-不使用 Claude `--worktree`，因为 worktree 已由 `specflow` 统一创建。两套 worktree 管理器叠加会产生分支命名、目录位置、清理和状态所有权冲突。Claude 官方支持直接进入手工创建的 Git worktree 开发。
+不使用 Claude `--worktree`，因为 worktree 已由 `taskflow` 统一创建。两套 worktree 管理器叠加会产生分支命名、目录位置、清理和状态所有权冲突。Claude 官方支持直接进入手工创建的 Git worktree 开发。
 
 ### 10.3 项目指令文件
 
@@ -697,7 +697,7 @@ Claude Code 的 `--add-dir` 可以授权额外目录，但默认不会加载这�
 
 ## Claude Code
 
-- 多仓库任务由 specflow 管理。
+- 多仓库任务由 taskflow 管理。
 - 不创建额外 worktree。
 - 修改其他仓库前确认目标 OpenSpec Change。
 ```
@@ -709,7 +709,7 @@ Codex 读取 `AGENTS.md`；Claude 读取 `CLAUDE.md`。工具特有的内容留�
 同一任务的相同 worktree 集合只允许一个活动写会话：
 
 ```text
-specflow open REFUND-123 --tool codex
+taskflow open REFUND-123 --tool codex
 ```
 
 运行中再次执行 Claude open 必须返回明确冲突。用户退出 Codex 后可以用 Claude 继续同一任务。
@@ -762,16 +762,16 @@ openspec-multirepo/
 ### 11.3 Skill 工作流
 
 1. 定位任务目录和配置。
-2. 运行 `specflow doctor --json`。
+2. 运行 `taskflow doctor --json`。
 3. 读取 `inventory.json` 与各仓库 `openspec/specs/`。
 4. 推断仓库职责、主仓库、依赖和协议所有者。
-5. 生成或修改 `specflow.yaml` 与推断报告。
-6. 运行 `specflow config validate`。
+5. 生成或修改 `taskflow.yaml` 与推断报告。
+6. 运行 `taskflow config validate`。
 7. 向用户展示高影响决策。
-8. 用户确认后调用 `specflow start --dry-run`，再决定是否执行。
+8. 用户确认后调用 `taskflow start --dry-run`，再决定是否执行。
 9. 先生成所有仓库 Proposal，再统一审查跨仓库协议。
 10. 按依赖顺序 Apply，并在每一步明确目标仓库和 Change。
-11. 调用 `specflow validate` 聚合验证。
+11. 调用 `taskflow validate` 聚合验证。
 12. 只生成归档计划；归档和清理需要用户明确指令。
 
 ## 12. 安全与可靠性
@@ -898,7 +898,7 @@ OpenSpec 可使用假的可执行文件完成大部分测试，再保留少量�
 - 两者都不会携带权限绕过参数。
 - Claude 不携带 `--worktree`。
 - Codex 活动时 Claude 启动被拒绝，反之亦然。
-- 子进程真实退出码写入 `childExitCode`，specflow 返回 1，锁被释放。
+- 子进程真实退出码写入 `childExitCode`，taskflow 返回 1，锁被释放。
 
 ### 14.5 跨平台 CI
 
@@ -934,7 +934,7 @@ CI 固定安装 OpenSpec 1.4.1，真实适配器集成测试会验证 status/str
 - 建立 domain、Runner、配置加载和输出协议。
 - 配置 lint、测试、GoReleaser 和 CI。
 
-验收：`specflow version`、`specflow --help`、JSON 错误协议可用。
+验收：`taskflow version`、`taskflow --help`、JSON 错误协议可用。
 
 ### 阶段 1：安全初始化 MVP
 
@@ -995,7 +995,7 @@ CI 固定安装 OpenSpec 1.4.1，真实适配器集成测试会验证 status/str
 
 ## 16. MVP 验收标准
 
-- `specflow init` 可创建需求目录并关联 1–10 个本地仓库。
+- `taskflow init` 可创建需求目录并关联 1–10 个本地仓库。
 - 配置未知字段、循环依赖、路径逃逸会被拒绝。
 - `doctor --json` 输出稳定且可被 Skill 读取。
 - `start --dry-run` 对文件系统和 Git 零修改。
@@ -1011,7 +1011,7 @@ CI 固定安装 OpenSpec 1.4.1，真实适配器集成测试会验证 status/str
 ## 17. 建议交给 Codex 的实现指令
 
 ```text
-请依据 specflow-go-implementation-plan.md 实现 specflow。
+请依据 taskflow-go-implementation-plan.md 实现 taskflow。
 
 技术要求：
 - 使用 Go，不使用 TypeScript、Python 或 Bash 实现核心 CLI。
@@ -1045,7 +1045,7 @@ CI 固定安装 OpenSpec 1.4.1，真实适配器集成测试会验证 status/str
 | 首命令语义 | `init` 只创建需求控制目录和仓库关联 |
 | worktree 创建 | 由 `start --execute` 统一执行 |
 | 多工具支持 | Adapter 模型，首批 Codex 与 Claude Code |
-| Claude `--worktree` | 禁用，避免与 specflow 的 worktree 所有权冲突 |
+| Claude `--worktree` | 禁用，避免与 taskflow 的 worktree 所有权冲突 |
 | OpenSpec Workset | 可选增强，不作为核心依赖 |
 | 跨仓库规格 | 每仓库独立，协议指定唯一所有者 |
 | 配置格式 | 严格 YAML，稳定 JSON 机器输出 |

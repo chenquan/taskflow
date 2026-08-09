@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chenquan/specflow/internal/execx"
+	"github.com/chenquan/taskflow/internal/execx"
 )
 
 func TestClientInspectsAndCreatesWorktrees(t *testing.T) {

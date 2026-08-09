@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chenquan/specflow/internal/domain"
-	"github.com/chenquan/specflow/internal/execx"
-	"github.com/chenquan/specflow/internal/report"
+	"github.com/chenquan/taskflow/internal/domain"
+	"github.com/chenquan/taskflow/internal/execx"
+	"github.com/chenquan/taskflow/internal/report"
 )
 
 func makeGitRepo(t *testing.T) string {
@@ -36,7 +36,7 @@ func TestLifecycleDoesNotRequireRequirementFile(t *testing.T) {
 	if result, code := s.Init(context.Background(), options); code != report.ExitOK || !result.OK {
 		t.Fatalf("init: code=%d result=%#v", code, result)
 	}
-	raw, err := os.ReadFile(filepath.Join(tasks, "TASK-1", "specflow.yaml"))
+	raw, err := os.ReadFile(filepath.Join(tasks, "TASK-1", "taskflow.yaml"))
 	if err != nil || strings.Contains(string(raw), "openspec") {
 		t.Fatalf("generated configuration contains OpenSpec: %s (%v)", raw, err)
 	}
@@ -61,7 +61,7 @@ func TestLifecycleDoesNotRequireRequirementFile(t *testing.T) {
 
 func TestLoadStartStateCompatibility(t *testing.T) {
 	root := t.TempDir()
-	stateDir := filepath.Join(root, ".specflow")
+	stateDir := filepath.Join(root, ".taskflow")
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		t.Fatal(err)
 	}

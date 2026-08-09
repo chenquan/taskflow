@@ -42,7 +42,7 @@ func TestTasksRootDefaultsToCurrentDirectory(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "TASK-1", "specflow.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(workspace, "TASK-1", "taskflow.yaml")); err != nil {
 		t.Fatalf("task workspace was not created under current directory: %v", err)
 	}
 }
