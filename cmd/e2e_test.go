@@ -34,7 +34,6 @@ func TestLifecycleRunsWithoutOpenSpec(t *testing.T) {
 	if err != nil || strings.Contains(string(raw), "openspec") {
 		t.Fatalf("OpenSpec leaked into task configuration: %s (%v)", raw, err)
 	}
-	run("doctor", "task")
 	run("start", "task", "--execute")
 	status := run("--json", "status", "task")
 	if strings.Contains(status, "openSpec") || !strings.Contains(status, "feature/task") {

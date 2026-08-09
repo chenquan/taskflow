@@ -8,7 +8,7 @@ import (
 
 func TestJSONResultHasStableFields(t *testing.T) {
 	var b bytes.Buffer
-	r := New("doctor", "A")
+	r := New("status", "A")
 	r.Fail(Diagnostic{Code: "X", Message: "bad"})
 	if err := Render(&b, r, true); err != nil {
 		t.Fatal(err)

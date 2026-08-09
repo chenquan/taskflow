@@ -1,27 +1,12 @@
 ## Purpose
 
-Define read-only environment and repository readiness diagnostics.
+Define execute-mode repository preflight checks.
 
 ## Requirements
 
-### Requirement: Diagnose required tool and repository readiness
-The CLI SHALL provide `specflow doctor <task-id>` that inspects Git, OpenSpec when change creation is enabled, enabled development-tool executables, each configured source repository, configured base reference, OpenSpec initialization, worktree target safety, dependency graph, and configured-check executable availability. OpenSpec MUST resolve to a parseable semantic version in the supported range `>=1.4.1, <2.0.0`; an unsupported or malformed OpenSpec version MUST be reported as tool incompatibility. Doctor MUST not fetch, create, delete, or otherwise mutate Git or OpenSpec state.
+### Requirement: Preflight execute-mode repository readiness
+Execute-mode `start` MUST inspect each configured source repository, base reference, worktree target, branch occupancy, and dependency graph before making filesystem or Git mutations.
 
 #### Scenario: Report a missing base reference
 - **WHEN** a configured repository base reference cannot be found locally
-- **THEN** doctor reports a `BASE_REF_NOT_FOUND` diagnostic with a corrective hint and a failing environment status
-
-#### Scenario: Report a dirty source checkout as a warning
-- **WHEN** a configured source repository has uncommitted changes
-- **THEN** doctor emits a warning while continuing its remaining read-only checks
-
-#### Scenario: Reject unsupported OpenSpec
-- **WHEN** change creation is enabled and OpenSpec reports a version outside the supported range
-- **THEN** doctor returns a structured tool-compatibility diagnostic with exit code 6
-
-### Requirement: Doctor supports repository-scoped diagnostics
-The CLI MUST support limiting doctor diagnostics to a named configured repository while still validating task-level configuration needed to interpret that repository.
-
-#### Scenario: Diagnose one repository
-- **WHEN** a user requests doctor for one declared repository
-- **THEN** the result contains diagnostics for that repository and task-level configuration only
+- **THEN** start reports a `BASE_REF_NOT_FOUND` diagnostic before mutation

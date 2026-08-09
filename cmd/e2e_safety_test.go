@@ -221,7 +221,7 @@ func TestE2EMultiRepositoryLifecycleAndReadiness(t *testing.T) {
 	if !bytes.Equal(beforeState, safetyState(t, f.tasks, "multi")) || !reflect.DeepEqual(beforeFiles, safetyFiles(t, filepath.Join(f.tasks, "multi"))) {
 		t.Fatal("dry run mutated task")
 	}
-	for _, command := range [][]string{{"config", "validate", "multi"}, {"doctor", "multi"}, {"start", "multi", "--execute"}, {"start", "multi", "--execute"}} {
+	for _, command := range [][]string{{"start", "multi", "--execute"}, {"start", "multi", "--execute"}} {
 		if out, err := runSafetyCobra(t, f.tasks, command...); err != nil {
 			t.Fatalf("%v: %v: %s", command, err, out)
 		}
@@ -238,14 +238,6 @@ func TestE2EMultiRepositoryLifecycleAndReadiness(t *testing.T) {
 	}
 	if got := safetyLog(t, f.checkLog); len(got) != 3 {
 		t.Fatalf("checks: %v", got)
-	}
-	state := safetyState(t, f.tasks, "multi")
-	files := safetyFiles(t, filepath.Join(f.tasks, "multi"))
-	if out, err := runSafetyCobra(t, f.tasks, "finish", "multi", "--dry-run"); err != nil || !strings.Contains(out, "finish: ok") {
-		t.Fatalf("finish: %v: %s", err, out)
-	}
-	if !bytes.Equal(state, safetyState(t, f.tasks, "multi")) || !reflect.DeepEqual(files, safetyFiles(t, filepath.Join(f.tasks, "multi"))) {
-		t.Fatal("finish mutated task")
 	}
 }
 
@@ -294,7 +286,7 @@ func TestE2EPreflightAndLockConflictsPreserveState(t *testing.T) {
 	}
 }
 
-func TestE2EValidationAndFinishBlockers(t *testing.T) {
+func TestE2EValidation(t *testing.T) {
 	f := newSafetyFixture(t)
 	if out, err := runSafetyCobra(t, f.tasks, "init", "checks", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
 		t.Fatal(out, err)
@@ -311,10 +303,6 @@ func TestE2EValidationAndFinishBlockers(t *testing.T) {
 	if e2eCode(err) != int(report.ExitValidation) || result.Errors[0].Code != "CHECK_FAILED" {
 		t.Fatalf("failed check: %d %#v", e2eCode(err), result)
 	}
-	out, err = runSafetyCobra(t, f.tasks, "--json", "finish", "checks", "--dry-run")
-	if e2eCode(err) != int(report.ExitValidation) || !strings.Contains(out, "VALIDATION_REPORT_FAILED") {
-		t.Fatalf("failed finish: %d %s", e2eCode(err), out)
-	}
 	t.Setenv("SPECFLOW_E2E_CHECK_EXIT_CODE", "")
 	mutateSafetyTask(t, f.tasks, "checks", func(task *domain.Task) { task.Repositories[0].Checks[0].Timeout = "20ms" })
 	t.Setenv("SPECFLOW_E2E_CHECK_DELAY", "100ms")
@@ -327,29 +315,9 @@ func TestE2EValidationAndFinishBlockers(t *testing.T) {
 	if out, err := runSafetyCobra(t, f.tasks, "validate", "checks"); err != nil {
 		t.Fatal(out, err)
 	}
-	if err := os.WriteFile(filepath.Join(f.tasks, "checks", "worktrees", "repo", "dirty.txt"), []byte("dirty\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	out, err = runSafetyCobra(t, f.tasks, "--json", "finish", "checks", "--dry-run")
-	if e2eCode(err) != int(report.ExitValidation) || !strings.Contains(out, "DIRTY_WORKTREE") {
-		t.Fatalf("dirty finish: %d %s", e2eCode(err), out)
-	}
-	if err := os.Remove(filepath.Join(f.tasks, "checks", "worktrees", "repo", "dirty.txt")); err != nil {
-		t.Fatal(err)
-	}
 	worktree := filepath.Join(f.tasks, "checks", "worktrees", "repo")
 	if output, err := exec.Command("git", "-C", worktree, "commit", "--allow-empty", "-m", "advance after validation").CombinedOutput(); err != nil {
 		t.Fatalf("advance worktree: %v: %s", err, output)
-	}
-	out, err = runSafetyCobra(t, f.tasks, "--json", "finish", "checks", "--dry-run")
-	if e2eCode(err) != int(report.ExitValidation) || !strings.Contains(out, "VALIDATION_REPORT_STALE") {
-		t.Fatalf("head changed finish: %d %s", e2eCode(err), out)
-	}
-	mutateSafetyTask(t, f.tasks, "checks", func(task *domain.Task) { task.Task.Description = "stale" })
-	checks := safetyLog(t, f.checkLog)
-	out, err = runSafetyCobra(t, f.tasks, "--json", "finish", "checks", "--dry-run")
-	if e2eCode(err) != int(report.ExitValidation) || !strings.Contains(out, "VALIDATION_REPORT_STALE") || len(safetyLog(t, f.checkLog)) != len(checks) {
-		t.Fatalf("stale: %d %s", e2eCode(err), out)
 	}
 }
 
@@ -495,10 +463,7 @@ func TestE2EIdempotentInitializationFetchAndUnknownRepository(t *testing.T) {
 	if out, err := runSafetyCobra(t, f.tasks, "start", "fetch", "--execute"); err != nil {
 		t.Fatalf("fetch start: %v %s", err, out)
 	}
-	if out, err := runSafetyCobra(t, f.tasks, "config", "show", "fetch"); err != nil || !strings.Contains(out, "origin/main") {
-		t.Fatalf("config show: %v %s", err, out)
-	}
-	for _, args := range [][]string{{"--json", "doctor", "fetch", "--repo", "missing"}, {"--json", "validate", "fetch", "--repo", "missing"}} {
+	for _, args := range [][]string{{"--json", "validate", "fetch", "--repo", "missing"}} {
 		out, err := runSafetyCobra(t, f.tasks, args...)
 		if e2eCode(err) != int(report.ExitConfig) || !strings.Contains(out, "UNKNOWN_REPOSITORY") {
 			t.Fatalf("unknown repository %v: %d %s", args, e2eCode(err), out)
@@ -508,7 +473,7 @@ func TestE2EIdempotentInitializationFetchAndUnknownRepository(t *testing.T) {
 
 func TestE2ECommandArgumentGuards(t *testing.T) {
 	f := newSafetyFixture(t)
-	for _, args := range [][]string{{"--json", "start", "missing", "--dry-run", "--execute"}, {"--json", "finish", "missing"}, {"--json", "init", "../escape", "--primary", "repo", "--repo", "repo=" + f.repo}} {
+	for _, args := range [][]string{{"--json", "start", "missing", "--dry-run", "--execute"}, {"--json", "init", "../escape", "--primary", "repo", "--repo", "repo=" + f.repo}} {
 		out, err := runSafetyCobra(t, f.tasks, args...)
 		if e2eCode(err) != int(report.ExitConfig) || !strings.Contains(out, "INVALID_") {
 			t.Fatalf("argument guard %v: %d %s", args, e2eCode(err), out)

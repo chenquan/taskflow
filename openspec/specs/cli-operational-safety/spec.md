@@ -26,8 +26,4 @@ Configuration validation MUST reject a non-Git source directory. Status MUST ins
 - **THEN** status reports the managed worktree as dirty
 
 ### Requirement: Honor fetch and failure state
-When `execution.fetch` is true, start dry-run MUST list and execute MUST perform a fetch before each repository worktree action. Finish MUST return validation failure when blockers exist.
-
-#### Scenario: Blocked finish
-- **WHEN** validation finds an incomplete change or failed check
-- **THEN** finish reports blockers and exits with validation failure
+When `execution.fetch` is true, start dry-run MUST list and execute MUST perform a fetch before each repository worktree action.

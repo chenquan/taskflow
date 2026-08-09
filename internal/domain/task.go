@@ -139,15 +139,3 @@ type StatusData struct {
 	Repositories   []RepositoryStatus `json:"repositories"`
 	LastValidation *ValidationReport  `json:"lastValidation,omitempty"`
 }
-
-type FinishData struct {
-	Status          StatusData        `json:"status"`
-	Validation      *ValidationReport `json:"validation,omitempty"`
-	ValidationOrder []string          `json:"validationOrder"`
-	MergeOrder      []string          `json:"mergeOrder"`
-	ArchiveOrder    []string          `json:"archiveOrder"`
-	CleanupOrder    []string          `json:"cleanupOrder"`
-	CleanupBlockers []string          `json:"cleanupBlockers"`
-	Archive         string            `json:"archive"`
-	Cleanup         string            `json:"cleanup"`
-}

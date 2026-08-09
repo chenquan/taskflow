@@ -64,13 +64,6 @@ specflow --tasks-root ~/tasks init REFUND-123 \
   --repo payment-sdk=~/projects/payment-sdk
 ```
 
-检查配置和环境：
-
-```bash
-specflow --tasks-root ~/tasks config validate REFUND-123
-specflow --tasks-root ~/tasks doctor REFUND-123
-```
-
 预览并创建开发环境：
 
 ```bash
@@ -85,14 +78,6 @@ specflow --tasks-root ~/tasks open REFUND-123 --tool codex
 specflow --tasks-root ~/tasks status REFUND-123
 specflow --tasks-root ~/tasks validate REFUND-123
 ```
-
-完成前检查：
-
-```bash
-specflow --tasks-root ~/tasks finish REFUND-123 --dry-run
-```
-
-`finish` 只生成非破坏性的 readiness 报告，不会自动 commit、push、创建 PR、合并或清理 worktree。
 
 ## 任务目录
 
@@ -169,7 +154,7 @@ execution:
   fetch: true
 ```
 
-`source` 和 `task.root` 使用绝对路径；`worktree` 是相对于任务根目录的路径。修改配置后，建议依次运行 `config validate`、`doctor` 和 `start --dry-run`。
+`source` 和 `task.root` 使用绝对路径；`worktree` 是相对于任务根目录的路径。修改配置后，建议运行 `start --dry-run` 检查执行计划。
 
 ## JSON 输出
 

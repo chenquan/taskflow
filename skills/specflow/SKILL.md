@@ -28,11 +28,9 @@ Use the CLI as the authority for task-workspace, worktree, and tool-launch opera
    ```
 
 2. Treat `init` as metadata-only: it must not create branches, worktrees, commits, or fetch remotes.
-3. Before worktree creation, run these checks and resolve errors:
+3. Before worktree creation, run the dry-run and resolve any reported errors:
 
    ```bash
-   specflow --tasks-root <tasks-root> config validate <task-id>
-   specflow --tasks-root <tasks-root> doctor <task-id>
    specflow --tasks-root <tasks-root> start <task-id> --dry-run
    ```
 
@@ -54,13 +52,7 @@ Use the CLI as the authority for task-workspace, worktree, and tool-launch opera
    Do not add permission-bypass flags or create nested worktrees.
 
 2. Inspect progress with `status`; execute repository checks with `validate`. To limit validation, use `validate <task-id> --repo <repo-name>`.
-3. Before declaring work complete, run:
-
-   ```bash
-   specflow --tasks-root <tasks-root> finish <task-id> --dry-run
-   ```
-
-   Report every blocker. This report does not commit, push, create a PR, merge, or clean worktrees.
+3. Before declaring work complete, run `status` and `validate`, then report any blockers. SpecFlow does not commit, push, create a PR, merge, or clean worktrees.
 
 ## Safety rules
 

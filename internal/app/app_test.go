@@ -43,9 +43,6 @@ func TestLifecycleDoesNotRequireRequirementFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, code := s.Doctor(context.Background(), task, "repo"); code != report.ExitOK || !result.OK {
-		t.Fatalf("doctor: code=%d result=%#v", code, result)
-	}
 	if result, code := s.Start(context.Background(), task, StartOptions{Execute: true}); code != report.ExitOK || !result.OK {
 		t.Fatalf("start: code=%d result=%#v", code, result)
 	}
@@ -58,29 +55,6 @@ func TestLifecycleDoesNotRequireRequirementFile(t *testing.T) {
 	}
 	if result, code := s.Validate(context.Background(), task); code != report.ExitOK || !result.OK {
 		t.Fatalf("validate: code=%d result=%#v", code, result)
-	}
-	if result, code := s.Finish(context.Background(), task); code != report.ExitOK || !result.OK {
-		t.Fatalf("finish: code=%d result=%#v", code, result)
-	}
-}
-
-func TestDoctorReportsDirtySourceWithoutOpenSpecError(t *testing.T) {
-	repo := makeGitRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("x"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	tasks := t.TempDir()
-	s := New()
-	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-2", Primary: "repo", Repositories: []string{"repo=" + repo}}); code != report.ExitOK {
-		t.Fatal(code)
-	}
-	task, err := s.Load(tasks, "TASK-2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, code := s.Doctor(context.Background(), task, "repo")
-	if code != report.ExitOK || !hasDiagnostic(result.Warnings, "SOURCE_DIRTY") || hasDiagnostic(result.Errors, "OPENSPEC_NOT_INITIALIZED") {
-		t.Fatalf("doctor: code=%d result=%#v", code, result)
 	}
 }
 

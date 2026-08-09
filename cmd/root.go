@@ -108,59 +108,6 @@ func NewRootCommand() *cobra.Command {
 	}}
 	validate.Flags().StringVar(&validateRepo, "repo", "", "validate this repository and its dependencies")
 	root.AddCommand(validate)
-	var finishDryRun bool
-	finish := &cobra.Command{Use: "finish <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
-		if !finishDryRun {
-			r := report.New("finish", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "finish requires --dry-run"})
-			return render(c, r, report.ExitConfig)
-		}
-		t, e := svc.Load(tasksRoot, args[0])
-		if e != nil {
-			r := report.New("finish", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: e.Error()})
-			return render(c, r, report.ExitConfig)
-		}
-		r, code := svc.Finish(context.Background(), t)
-		return render(c, r, code)
-	}}
-	finish.Flags().BoolVar(&finishDryRun, "dry-run", false, "generate a non-mutating readiness report")
-	root.AddCommand(finish)
-	configCmd := &cobra.Command{Use: "config"}
-	configCmd.AddCommand(&cobra.Command{Use: "show <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
-		t, err := svc.Load(tasksRoot, args[0])
-		r := report.New("config show", args[0])
-		if err != nil {
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
-			return render(c, r, report.ExitConfig)
-		}
-		r.Data = t
-		return render(c, r, report.ExitOK)
-	}})
-	configCmd.AddCommand(&cobra.Command{Use: "validate <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
-		t, err := svc.Load(tasksRoot, args[0])
-		if err != nil {
-			r := report.New("config validate", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
-			return render(c, r, report.ExitConfig)
-		}
-		r, code := svc.ConfigValidate(context.Background(), t)
-		return render(c, r, code)
-	}})
-	root.AddCommand(configCmd)
-	var repo string
-	doctor := &cobra.Command{Use: "doctor <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
-		t, err := svc.Load(tasksRoot, args[0])
-		if err != nil {
-			r := report.New("doctor", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
-			return render(c, r, report.ExitConfig)
-		}
-		r, code := svc.Doctor(context.Background(), t, repo)
-		return render(c, r, code)
-	}}
-	doctor.Flags().StringVar(&repo, "repo", "", "only diagnose this repository")
-	root.AddCommand(doctor)
 	var projectSkills, forceSkills bool
 	skillCmd := &cobra.Command{Use: "skill", Short: "Install built-in agent skills"}
 	installSkills := &cobra.Command{Use: "install", Args: cobra.NoArgs, RunE: func(c *cobra.Command, args []string) error {

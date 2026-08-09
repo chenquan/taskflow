@@ -5,7 +5,7 @@ Define the safe multi-repository orchestration guidance shared by development ag
 ## Requirements
 
 ### Requirement: Guide safe multi-repository orchestration
-The skill SHALL instruct an agent to locate the task, read inventory and repository OpenSpec specs, run doctor/config validation, present ownership decisions, use dry-run before execute, and use status/validate after implementation.
+The skill SHALL instruct an agent to locate the task, read inventory, use dry-run before execute, and use status/validate after implementation.
 
 #### Scenario: Infer repository roles
 - **WHEN** an agent receives a task with multiple repositories

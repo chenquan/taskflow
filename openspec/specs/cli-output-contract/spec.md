@@ -22,13 +22,5 @@ The CLI MUST use exit code 0 for success, 1 for execution failure including a la
 - **WHEN** another local task holds the same source-repository branch lock
 - **THEN** execute-mode start reports `SOURCE_BRANCH_LOCKED` and exits with code 5 before mutation
 
-#### Scenario: Return an OpenSpec compatibility exit code
-- **WHEN** required OpenSpec has an unsupported or malformed version
-- **THEN** doctor or execute-mode start reports a structured diagnostic and exits with code 6
-
 ### Requirement: Preserve facts across output modes
 Text and JSON renderings of a command result MUST express the same success state, warnings, and errors, even though their layouts differ.
-
-#### Scenario: Compare a doctor failure across renderers
-- **WHEN** doctor finds the same missing executable in text and JSON modes
-- **THEN** both renderings identify the same diagnostic code and failing condition
