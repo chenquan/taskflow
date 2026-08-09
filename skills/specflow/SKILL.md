@@ -9,7 +9,7 @@ Use the CLI as the authority for task-workspace, worktree, and tool-launch opera
 
 ## Locate and inspect
 
-1. Ask for the task ID and task workspace root if they are not supplied.
+1. Ask for the task ID. If no task workspace root is supplied, SpecFlow uses the current working directory; pass `--tasks-root` only when the task root is elsewhere.
 2. Read `requirement.md`, `specflow.yaml`, and `.specflow/inventory.json` inside the task root before choosing an operation.
 3. Prefer machine-readable output when another agent, script, or structured diagnosis will consume the result:
 

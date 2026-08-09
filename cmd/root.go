@@ -23,11 +23,13 @@ func Execute() {
 	}
 }
 func NewRootCommand() *cobra.Command {
-	var tasksRoot string
+	// Keep task workspaces local to the directory from which specflow is run
+	// unless the caller explicitly selects another root with --tasks-root.
+	var tasksRoot = "."
 	var asJSON bool
 	svc := app.New()
 	root := &cobra.Command{Use: "specflow", Short: "Safely coordinate local multi-repository Git work", SilenceUsage: true}
-	root.PersistentFlags().StringVar(&tasksRoot, "tasks-root", "", "task workspace root")
+	root.PersistentFlags().StringVar(&tasksRoot, "tasks-root", ".", "task workspace root (default: current directory)")
 	root.PersistentFlags().BoolVar(&asJSON, "json", false, "emit JSON")
 	render := func(c *cobra.Command, r report.Result, code report.ExitCode) error {
 		if err := report.Render(c.OutOrStdout(), r, asJSON); err != nil {
