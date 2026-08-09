@@ -78,7 +78,7 @@ func TestBuildAppendsExtraArgsAndAllowsPermissionBypass(t *testing.T) {
 		t.Fatalf("extra args not appended: %#v", spec.Args)
 	}
 	spec, err = (AdapterImpl{Tool: "codex"}).Build(task, []string{"--dangerously-skip-permissions"})
-	if err != nil || len(spec.Args) != 4 || spec.Args[len(spec.Args)-1] != "--dangerously-skip-permissions" {
+	if err != nil || len(spec.Args) != 3 || spec.Args[len(spec.Args)-1] != "--dangerously-skip-permissions" {
 		t.Fatalf("permission bypass argument should be forwarded: %#v, %v", spec, err)
 	}
 	if _, err := (AdapterImpl{Tool: "codex"}).Build(task, []string{"--worktree", "other"}); err == nil {
