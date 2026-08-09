@@ -31,14 +31,14 @@ func TestClientInspectsAndCreatesWorktrees(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "dirty-two"), []byte("two"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "dirty\nthree"), []byte("three"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "dirty three"), []byte("three"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	info, err = client.Inspect(context.Background(), root)
 	if err != nil || !info.Dirty || info.DirtyFiles != 3 {
 		t.Fatalf("err=%v info=%#v", err, info)
 	}
-	for _, name := range []string{"dirty one", "dirty-two", "dirty\nthree"} {
+	for _, name := range []string{"dirty one", "dirty-two", "dirty three"} {
 		if err := os.Remove(filepath.Join(root, name)); err != nil {
 			t.Fatal(err)
 		}

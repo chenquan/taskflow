@@ -44,3 +44,17 @@ func TestAcquireSourceCoordinatesBranchesIndependently(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAcquireSourceRequiresIdentity(t *testing.T) {
+	for _, values := range [][2]string{{"", "branch"}, {"common", ""}} {
+		if _, err := AcquireSource(values[0], values[1]); err == nil {
+			t.Fatalf("expected invalid source identity for %#v", values)
+		}
+	}
+}
+
+func TestConflictError(t *testing.T) {
+	if (ErrConflict{}).Error() == "" {
+		t.Fatal("empty conflict error")
+	}
+}

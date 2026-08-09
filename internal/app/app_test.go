@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/chenquan/specflow/internal/domain"
+	"github.com/chenquan/specflow/internal/execx"
 	"github.com/chenquan/specflow/internal/report"
 )
 
@@ -108,4 +109,71 @@ func hasDiagnostic(diagnostics []report.Diagnostic, code string) bool {
 		}
 	}
 	return false
+}
+
+func TestPathAndRemoteHelpers(t *testing.T) {
+	if !samePath(".", ".") || samePath(".", filepath.Join(".", "other")) {
+		t.Fatal("unexpected path comparison")
+	}
+	if fetchRemote("upstream/main") != "upstream" || fetchRemote("") != "origin" {
+		t.Fatal("unexpected remote derivation")
+	}
+}
+
+func TestValidationReportRoundTripAndCompatibility(t *testing.T) {
+	root := t.TempDir()
+	task := domain.Task{Task: domain.TaskInfo{ID: "TASK", Root: root}}
+	reportValue := domain.ValidationReport{SchemaVersion: 1, TaskID: "TASK", Repositories: map[string]domain.RepositoryValidation{}}
+	if err := persistValidationReport(task, reportValue); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadValidationReport(task)
+	if err != nil || loaded.TaskID != "TASK" {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+	if err := os.WriteFile(validationReportPath(task), []byte("not-json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadValidationReport(task); err == nil {
+		t.Fatal("expected invalid report error")
+	}
+	if err := persistValidationReport(task, domain.ValidationReport{SchemaVersion: 2, TaskID: "TASK", Repositories: map[string]domain.RepositoryValidation{}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadValidationReport(task); err == nil {
+		t.Fatal("expected incompatible report error")
+	}
+}
+
+type openRunner struct {
+	err error
+}
+
+func (r openRunner) Run(context.Context, execx.CommandSpec) (execx.Result, error) {
+	if r.err != nil {
+		return execx.Result{ExitCode: 7}, r.err
+	}
+	return execx.Result{}, nil
+}
+
+func (openRunner) LookPath(string) (string, error) { return "", nil }
+
+func TestOpenReportsToolSuccessAndFailure(t *testing.T) {
+	task := domain.Task{
+		Task:         domain.TaskInfo{ID: "TASK", Root: t.TempDir()},
+		Primary:      "repo",
+		Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo"}},
+		Development:  domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}},
+	}
+	service := Service{Runner: openRunner{}}
+	if result, code := service.Open(context.Background(), task, "", nil, nil, nil); code != report.ExitOK || !result.OK {
+		t.Fatalf("success: code=%d result=%#v", code, result)
+	}
+	service.Runner = openRunner{err: os.ErrClosed}
+	if result, code := service.Open(context.Background(), task, "codex", nil, nil, nil); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "TOOL_EXITED") {
+		t.Fatalf("failure: code=%d result=%#v", code, result)
+	}
+	if result, code := service.Open(context.Background(), task, "unknown", nil, nil, nil); code != report.ExitConfig || result.OK {
+		t.Fatalf("invalid tool: code=%d result=%#v", code, result)
+	}
 }

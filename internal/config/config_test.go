@@ -74,6 +74,19 @@ func TestValidateDefaults(t *testing.T) {
 		t.Fatal(v.Repositories[0].Worktree)
 	}
 }
+
+func TestValidateDerivesVersionAndPrimary(t *testing.T) {
+	d := t.TempDir()
+	v := task(d)
+	v.Version = 0
+	v.Primary = ""
+	if err := Validate(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Version != domain.ConfigVersion || v.Primary != "one" {
+		t.Fatalf("version=%d primary=%q", v.Version, v.Primary)
+	}
+}
 func TestValidateCycle(t *testing.T) {
 	d := t.TempDir()
 	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {

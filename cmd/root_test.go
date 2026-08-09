@@ -46,3 +46,9 @@ func TestTasksRootDefaultsToCurrentDirectory(t *testing.T) {
 		t.Fatalf("task workspace was not created under current directory: %v", err)
 	}
 }
+
+func TestSkillScope(t *testing.T) {
+	if skillScope(true) != "project" || skillScope(false) != "global" {
+		t.Fatal("unexpected skill scope")
+	}
+}
