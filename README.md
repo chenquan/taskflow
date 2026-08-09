@@ -98,13 +98,8 @@ specflow --tasks-root ~/tasks validate REFUND-123
 ## 配置示例
 
 ```yaml
-version: 1
-
 task:
   id: REFUND-123
-  root: /Users/me/tasks/REFUND-123
-
-primary: order-service
 
 repositories:
   - name: order-service
@@ -144,7 +139,7 @@ execution:
   fetch: true
 ```
 
-`source` 和 `task.root` 使用绝对路径；`worktree` 是相对于任务根目录的路径。修改配置后，建议运行 `start --dry-run` 检查执行计划。
+任务根目录由 `--tasks-root` 和任务 ID 推导；第一个仓库默认作为主仓库。`source` 使用绝对路径；`worktree` 是相对于任务根目录的路径。修改配置后，建议运行 `start --dry-run` 检查执行计划。
 
 ## JSON 输出
 

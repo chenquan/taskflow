@@ -41,8 +41,8 @@ type InitOptions struct {
 
 func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report.ExitCode) {
 	res := report.New("init", o.TaskID)
-	if o.TasksRoot == "" || o.TaskID == "" || len(o.Repositories) == 0 || o.Primary == "" {
-		res.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "tasks root, task id, primary, and at least one --repo are required"})
+	if o.TasksRoot == "" || o.TaskID == "" || len(o.Repositories) == 0 {
+		res.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "tasks root, task id, and at least one --repo are required"})
 		return res, report.ExitConfig
 	}
 	if err := config.ValidateTaskID(o.TaskID); err != nil {
@@ -73,7 +73,11 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 		}
 		repos = append(repos, domain.Repository{Name: parts[0], Source: source, Worktree: filepath.Join("worktrees", parts[0])})
 	}
-	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: root}, Primary: o.Primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}, "claude": {Executable: "claude", LoadAdditionalInstructions: true}}}}
+	primary := o.Primary
+	if primary == "" {
+		primary = repos[0].Name
+	}
+	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: root}, Primary: primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}, "claude": {Executable: "claude", LoadAdditionalInstructions: true}}}}
 	if err = config.Validate(&t); err != nil {
 		res.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
 		return res, report.ExitConfig

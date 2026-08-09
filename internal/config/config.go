@@ -40,6 +40,14 @@ func Load(path string) (domain.Task, error) {
 	if err = d.Decode(&t); err != nil {
 		return domain.Task{}, fmt.Errorf("decode %s: %w", path, err)
 	}
+	t.Version = domain.ConfigVersion
+	t.Task.Root, err = filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return domain.Task{}, fmt.Errorf("resolve task root for %s: %w", path, err)
+	}
+	if t.Primary == "" && len(t.Repositories) > 0 {
+		t.Primary = t.Repositories[0].Name
+	}
 	if err = Validate(&t); err != nil {
 		return domain.Task{}, err
 	}
@@ -77,6 +85,9 @@ func stripLegacyOpenSpecField(raw []byte) ([]byte, error) {
 }
 
 func Validate(t *domain.Task) error {
+	if t.Version == 0 {
+		t.Version = domain.ConfigVersion
+	}
 	if t.Version != domain.ConfigVersion {
 		return fmt.Errorf("unsupported config version %d", t.Version)
 	}
@@ -96,6 +107,9 @@ func Validate(t *domain.Task) error {
 	t.Task.Root = root
 	if len(t.Repositories) == 0 {
 		return fmt.Errorf("at least one repository is required")
+	}
+	if t.Primary == "" {
+		t.Primary = t.Repositories[0].Name
 	}
 	seen := map[string]bool{}
 	primary := false

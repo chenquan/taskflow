@@ -5,9 +5,9 @@ import "time"
 const ConfigVersion = 1
 
 type Task struct {
-	Version      int          `yaml:"version" json:"version"`
+	Version      int          `yaml:"-" json:"-"`
 	Task         TaskInfo     `yaml:"task" json:"task"`
-	Primary      string       `yaml:"primary" json:"primary"`
+	Primary      string       `yaml:"-" json:"-"`
 	Repositories []Repository `yaml:"repositories" json:"repositories"`
 	Development  Development  `yaml:"development" json:"development"`
 	Execution    Execution    `yaml:"execution" json:"execution"`
@@ -15,7 +15,7 @@ type Task struct {
 
 type TaskInfo struct {
 	ID   string `yaml:"id" json:"id"`
-	Root string `yaml:"root" json:"root"`
+	Root string `yaml:"-" json:"-"`
 }
 
 type Repository struct {
