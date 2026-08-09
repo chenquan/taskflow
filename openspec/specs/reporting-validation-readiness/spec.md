@@ -19,8 +19,8 @@ Validation MUST run repository checks in topological dependency order.
 - **THEN** validation executes the dependency check first
 
 ### Requirement: Reject invalid check configuration
-Configuration validation MUST reject non-empty invalid check timeout values and non-lower-kebab-case change IDs.
+Configuration validation MUST reject non-empty invalid check timeout values.
 
-#### Scenario: Invalid change ID
-- **WHEN** a repository change is `My_Change`
+#### Scenario: Invalid check timeout
+- **WHEN** a repository check timeout is not a valid duration
 - **THEN** configuration validation fails before start

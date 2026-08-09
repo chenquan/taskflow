@@ -19,7 +19,7 @@ When command streams are supplied, the runner MUST execute the child without out
 - **THEN** the child process receives `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`
 
 ### Requirement: Validate and report actual managed repositories
-Configuration validation MUST reject a non-Git source directory. Status MUST inspect the managed worktree for dirty state and branch.
+Initialization and execute-mode preflight MUST reject a non-Git source directory. Status MUST inspect the managed worktree for dirty state and branch.
 
 #### Scenario: Dirty managed worktree
 - **WHEN** a managed worktree has an uncommitted file while source is clean
@@ -27,3 +27,7 @@ Configuration validation MUST reject a non-Git source directory. Status MUST ins
 
 ### Requirement: Honor fetch and failure state
 When `execution.fetch` is true, start dry-run MUST list and execute MUST perform a fetch before each repository worktree action.
+
+#### Scenario: Fetch is planned and executed
+- **WHEN** a task enables `execution.fetch`
+- **THEN** dry-run lists a fetch action before the repository worktree action and execute performs that fetch before creating the worktree

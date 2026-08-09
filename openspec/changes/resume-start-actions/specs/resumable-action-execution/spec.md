@@ -20,7 +20,7 @@ Start MUST acquire the task lock, persist phase and per-repository action outcom
 - **THEN** start returns a structured state-conflict failure before changing state, Git, or the filesystem
 
 #### Scenario: Corrupt state blocks resume
-- **WHEN** `.specflow/state.json` is malformed or incompatible
+- **WHEN** `.taskflow/state.json` is malformed or incompatible
 - **THEN** start returns a structured state-incompatible failure and preserves the existing state file
 
 #### Scenario: Concurrent start is rejected

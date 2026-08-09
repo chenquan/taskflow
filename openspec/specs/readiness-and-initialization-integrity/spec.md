@@ -5,11 +5,11 @@ Define task completeness, source integrity, and mutation-free initialization rej
 ## Requirements
 
 ### Requirement: Require a non-bare Git worktree source
-Configuration validation SHALL accept a repository source only when `git rev-parse --is-inside-work-tree` reports `true`.
+Initialization and execute-mode preflight SHALL accept a repository source only when Git inspection reports a non-bare worktree.
 
 #### Scenario: Bare repository source
 - **WHEN** a configured source is an existing bare Git repository
-- **THEN** configuration validation rejects it before start
+- **THEN** initialization rejects it before creating a task workspace
 
 ### Requirement: Reject invalid initialization without a task directory
 `init` SHALL validate its fully constructed configuration before creating the final task directory.

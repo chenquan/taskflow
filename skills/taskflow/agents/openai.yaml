@@ -1,4 +1,4 @@
 interface:
   display_name: "Taskflow AI Workspace"
-  short_description: "Prepare safe Taskflow workspaces for AI coding"
-  default_prompt: "Use $taskflow to safely prepare and operate this Taskflow AI coding workspace."
+  short_description: "Safely coordinate multi-repository AI workspaces"
+  default_prompt: "Use $taskflow to prepare, coordinate, and safely operate this multi-repository AI coding task."
