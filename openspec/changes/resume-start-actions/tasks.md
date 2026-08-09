@@ -18,5 +18,5 @@
 
 ## 4. Validation and handoff
 
-- [ ] 4.1 Run the full Go test, race, vet, coverage, OpenSpec strict validation, and diff checks.
+- [x] 4.1 Run the full Go test, race, vet, coverage, OpenSpec strict validation, and diff checks.
 - [x] 4.2 Review the final diff for scope and report remaining limitations or follow-up work.

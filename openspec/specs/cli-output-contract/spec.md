@@ -24,3 +24,7 @@ The CLI MUST use exit code 0 for success, 1 for execution failure including a la
 
 ### Requirement: Preserve facts across output modes
 Text and JSON renderings of a command result MUST express the same success state, warnings, and errors, even though their layouts differ.
+
+#### Scenario: Render equivalent command outcomes
+- **WHEN** a command is rendered in text mode and JSON mode
+- **THEN** both renderings express the same success state, warnings, and structured errors

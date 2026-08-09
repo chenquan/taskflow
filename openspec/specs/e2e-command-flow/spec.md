@@ -17,19 +17,19 @@ The test suite SHALL execute the user-facing task lifecycle through the Cobra co
 
 #### Scenario: Dry-run preserves all managed state
 - **WHEN** `start --dry-run` is executed for an initialized task
-- **THEN** the state file remains byte-for-byte unchanged, no managed worktree or OpenSpec change exists, the source checkout stays clean, and the configured feature branch is not created
+- **THEN** the state file remains byte-for-byte unchanged, no managed worktree exists, the source checkout stays clean, and the configured feature branch is not created
 
 #### Scenario: Repeated execute is idempotent
 - **WHEN** `start --execute` is run twice for the same task
-- **THEN** the second command succeeds without creating another worktree or invoking OpenSpec change creation again
+- **THEN** the second command succeeds without creating another worktree and reuses compatible persisted action outcomes
 
 #### Scenario: Initialization and configuration lifecycle
 - **WHEN** a task is initialized twice with equivalent arguments
 - **THEN** the second initialization reports reuse without overwriting files
 
 #### Scenario: Start failure resumes safely
-- **WHEN** OpenSpec change creation fails after the worktree is created and `start --execute` is retried after the fault is removed
-- **THEN** the first command records a failed partial state, the retry reuses the worktree, creates only the missing change, and transitions the task to started
+- **WHEN** fetch or worktree creation fails after an earlier action completed and `start --execute` is retried after the fault is removed
+- **THEN** the first command records a failed partial state, the retry reuses compatible completed actions, runs only unfinished work, and transitions the task to started
 
 #### Scenario: Concurrent lifecycle operations conflict safely
 - **WHEN** one start holds the task lock

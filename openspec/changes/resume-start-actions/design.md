@@ -1,6 +1,6 @@
 ## Context
 
-`start --execute` already writes `.specflow/state.json` after each action, but the current implementation reconstructs all actions as pending on every retry. Existing worktrees are reused by Git inspection, while completed fetches and persisted progress are not used as explicit recovery facts.
+`start --execute` writes `.taskflow/state.json` after each action. It must use persisted action outcomes alongside Git inspection so retries do not repeat compatible completed fetches or worktree actions.
 
 The change must preserve the task lock, source-branch locks, read-only preflight, atomic state writes, stable exit codes, and the existing no-rollback safety model.
 

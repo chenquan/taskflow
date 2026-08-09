@@ -1,17 +1,17 @@
 ---
 name: taskflow
-description: Safely operate Taskflow AI coding workspaces across multiple Git repositories. Use when preparing a task for Codex or Claude Code, checking configuration or environment, planning or creating managed worktrees, opening an AI coding tool, inspecting task state, running configured validation, or producing a pre-completion readiness report with the `taskflow` CLI.
+description: Safely operate Taskflow AI coding workspaces across multiple Git repositories. Use when initializing or inspecting a task, planning or creating managed worktrees, coordinating repository roles and cross-repository contracts, opening Codex or Claude, recovering a partial start, running configured validation, or reporting readiness with the `taskflow` CLI.
 ---
 
 # Taskflow
 
-Use the CLI as the authority for AI coding workspace, worktree, and tool-launch operations. Do not replace it with shell-composed Git or filesystem mutations.
+Use the CLI as the authority for task-workspace, worktree, fetch, and tool-launch operations. Do not replace those operations with shell-composed Git or filesystem mutations.
 
 ## Locate and inspect
 
-1. Ask for the task ID. If no task workspace root is supplied, Taskflow uses the current working directory; pass `--tasks-root` only when the task root is elsewhere.
-2. Read `taskflow.yaml` and `.taskflow/inventory.json` inside the task root before choosing an operation.
-3. Prefer machine-readable output when another agent, script, or structured diagnosis will consume the result:
+1. Ask for the task ID. The task directory is `<tasks-root>/<task-id>`; `--tasks-root` defaults to the current directory.
+2. Before choosing an operation, inspect `taskflow.yaml`, `.taskflow/inventory.json`, `.taskflow/state.json` when present, and the latest validation report when present.
+3. Prefer machine-readable output for diagnosis and handoff:
 
    ```bash
    taskflow --json --tasks-root <tasks-root> status <task-id>
@@ -28,21 +28,23 @@ Use the CLI as the authority for AI coding workspace, worktree, and tool-launch 
    ```
 
 2. Treat `init` as metadata-only: it must not create branches, worktrees, commits, or fetch remotes.
-3. Before worktree creation, run the dry-run and resolve any reported errors:
+3. Before worktree creation, run the dry-run and resolve reported errors:
 
    ```bash
    taskflow --tasks-root <tasks-root> start <task-id> --dry-run
    ```
 
-4. Present the dry-run actions and obtain explicit user approval before this mutating command:
+4. Before requesting execute approval, present repository roles, dependency order, and the owner of each cross-repository contract. Obtain confirmation of this coordination summary and explicit approval for execution.
+
+   Note that `execution.fetch: true` permits `start --execute` to fetch configured source remotes.
 
    ```bash
-   taskflow --tasks-root <tasks-root> start <task-id> --execute
+   taskflow --json --tasks-root <tasks-root> start <task-id> --execute
    ```
 
 ## Work and verify
 
-1. Start one configured development tool from the managed task only:
+1. Open a configured tool only after the managed worktrees are ready. Omitting `--tool` selects `development.default_tool`:
 
    ```bash
    taskflow --tasks-root <tasks-root> open <task-id> --tool codex
@@ -51,8 +53,10 @@ Use the CLI as the authority for AI coding workspace, worktree, and tool-launch 
 
    Do not add permission-bypass flags or create nested worktrees.
 
-2. Inspect progress with `status`; execute repository checks with `validate`. To limit validation, use `validate <task-id> --repo <repo-name>`.
-3. Before declaring work complete, run `status` and `validate`, then report any blockers. Taskflow does not commit, push, create a PR, merge, or clean worktrees.
+2. Inspect progress with `status`; execute repository checks with `validate`. `validate <task-id> --repo <repo-name>` includes that repository's dependencies.
+3. If `start --execute` partially fails, inspect `status` and the persisted state, fix the external cause, then rerun the same execute command. Taskflow reconciles compatible state and actual Git/worktree facts; never delete state or worktrees to force a retry.
+4. For `STATE_CONFLICT`, `STATE_INCOMPATIBLE`, lock, or worktree mismatch diagnostics, preserve the existing state and report the diagnostic. Propose the smallest non-destructive correction rather than overwriting files.
+5. Before declaring work complete, run `status` and `validate`, then report any blockers. Taskflow does not commit, push, create a PR, merge, or clean worktrees.
 
 ## Safety rules
 
