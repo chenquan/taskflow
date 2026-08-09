@@ -10,7 +10,7 @@ import (
 )
 
 func task(root string) domain.Task {
-	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}}}}
+	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}}}
 }
 
 func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T) {
@@ -52,15 +52,13 @@ func TestValidateDevelopmentPolicy(t *testing.T) {
 	}
 	v := task(d)
 	v.Development.DefaultTool = "claude"
-	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "not enabled") {
-		t.Fatalf("expected disabled default rejection, got %v", err)
+	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "no definition") {
+		t.Fatalf("expected missing default definition rejection, got %v", err)
 	}
 	v = task(d)
-	definition := v.Development.Tools["codex"]
-	definition.LaunchMode = "shell"
-	v.Development.Tools["codex"] = definition
-	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "launch mode") {
-		t.Fatalf("expected launch mode rejection, got %v", err)
+	v.Development.Tools["unknown"] = domain.ToolDef{Executable: "unknown"}
+	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "unsupported development tool") {
+		t.Fatalf("expected unsupported tool rejection, got %v", err)
 	}
 }
 func TestValidateDefaults(t *testing.T) {

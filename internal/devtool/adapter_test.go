@@ -8,7 +8,7 @@ import (
 )
 
 func TestLaunchSpecSafety(t *testing.T) {
-	task := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "a", Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a"}, {Name: "b", Worktree: "worktrees/b"}}, Development: domain.Development{EnabledTools: []string{"claude"}, Tools: map[string]domain.ToolDef{"claude": {Executable: "custom-claude", LaunchMode: "direct", LoadAdditionalInstructions: true}}}}
+	task := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "a", Repositories: []domain.Repository{{Name: "a", Worktree: "worktrees/a"}, {Name: "b", Worktree: "worktrees/b"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"claude": {Executable: "custom-claude", LoadAdditionalInstructions: true}}}}
 	s, e := AdapterImpl{Tool: "claude"}.Build(task)
 	if e != nil {
 		t.Fatal(e)
@@ -19,7 +19,7 @@ func TestLaunchSpecSafety(t *testing.T) {
 }
 
 func TestCodexUsesConfiguredExecutableAndAdditionalDirectories(t *testing.T) {
-	task := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "owner", Repositories: []domain.Repository{{Name: "owner", Worktree: "worktrees/owner"}, {Name: "sdk", Worktree: "worktrees/sdk"}, {Name: "ui", Worktree: "worktrees/ui"}}, Development: domain.Development{EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "/opt/tools/custom-codex", LaunchMode: "direct"}}}}
+	task := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "owner", Repositories: []domain.Repository{{Name: "owner", Worktree: "worktrees/owner"}, {Name: "sdk", Worktree: "worktrees/sdk"}, {Name: "ui", Worktree: "worktrees/ui"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"codex": {Executable: "/opt/tools/custom-codex"}}}}
 	spec, err := (AdapterImpl{Tool: "codex"}).Build(task)
 	if err != nil {
 		t.Fatal(err)
@@ -31,26 +31,19 @@ func TestCodexUsesConfiguredExecutableAndAdditionalDirectories(t *testing.T) {
 }
 
 func TestLaunchSpecRejectsInvalidPolicies(t *testing.T) {
-	base := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "repo", Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo"}}, Development: domain.Development{EnabledTools: []string{"codex"}, Tools: map[string]domain.ToolDef{"codex": {Executable: "codex", LaunchMode: "direct"}}}}
+	base := domain.Task{Task: domain.TaskInfo{Root: "/tmp/task"}, Primary: "repo", Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo"}}, Development: domain.Development{Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}}}
 	cases := []struct {
 		name string
 		tool string
 		edit func(*domain.Task)
 	}{
 		{name: "unsupported", tool: "other", edit: func(*domain.Task) {}},
-		{name: "disabled", tool: "claude", edit: func(task *domain.Task) {
-			task.Development.Tools["claude"] = domain.ToolDef{Executable: "claude", LaunchMode: "direct"}
-		}},
 		{name: "missing definition", tool: "codex", edit: func(task *domain.Task) { delete(task.Development.Tools, "codex") }},
-		{name: "unsupported mode", tool: "codex", edit: func(task *domain.Task) {
-			task.Development.Tools["codex"] = domain.ToolDef{Executable: "codex", LaunchMode: "shell"}
-		}},
 		{name: "missing primary", tool: "codex", edit: func(task *domain.Task) { task.Primary = "missing" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			task := base
-			task.Development.EnabledTools = append([]string(nil), base.Development.EnabledTools...)
 			task.Development.Tools = map[string]domain.ToolDef{"codex": base.Development.Tools["codex"]}
 			tc.edit(&task)
 			if _, err := (AdapterImpl{Tool: tc.tool}).Build(task); err == nil {

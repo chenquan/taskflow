@@ -417,7 +417,9 @@ func TestE2EResumesCompletedActionsAndRejectsIncompatibleState(t *testing.T) {
 	}
 
 	before := safetyState(t, f.tasks, "resume")
-	mutateSafetyTask(t, f.tasks, "resume", func(task *domain.Task) { task.Task.Description = "changed after start" })
+	mutateSafetyTask(t, f.tasks, "resume", func(task *domain.Task) {
+		task.Repositories[0].Checks = []domain.Check{{Name: "changed", Executable: "true"}}
+	})
 	out, err = runSafetyCobra(t, f.tasks, "--json", "start", "resume", "--execute")
 	result := decodeSafety(t, out)
 	if e2eCode(err) != int(report.ExitConflict) || len(result.Errors) != 1 || result.Errors[0].Code != "STATE_CONFLICT" {

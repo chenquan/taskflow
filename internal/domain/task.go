@@ -14,22 +14,18 @@ type Task struct {
 }
 
 type TaskInfo struct {
-	ID          string `yaml:"id" json:"id"`
-	Title       string `yaml:"title" json:"title"`
-	Description string `yaml:"description" json:"description"`
-	Root        string `yaml:"root" json:"root"`
+	ID   string `yaml:"id" json:"id"`
+	Root string `yaml:"root" json:"root"`
 }
 
 type Repository struct {
-	Name          string   `yaml:"name" json:"name"`
-	Source        string   `yaml:"source" json:"source"`
-	Base          string   `yaml:"base" json:"base"`
-	Branch        string   `yaml:"branch" json:"branch"`
-	Worktree      string   `yaml:"worktree" json:"worktree"`
-	Role          string   `yaml:"role" json:"role"`
-	ContractOwner bool     `yaml:"contract_owner" json:"contractOwner"`
-	DependsOn     []string `yaml:"depends_on" json:"dependsOn"`
-	Checks        []Check  `yaml:"checks" json:"checks"`
+	Name      string   `yaml:"name" json:"name"`
+	Source    string   `yaml:"source" json:"source"`
+	Base      string   `yaml:"base" json:"base"`
+	Branch    string   `yaml:"branch" json:"branch"`
+	Worktree  string   `yaml:"worktree" json:"worktree"`
+	DependsOn []string `yaml:"depends_on" json:"dependsOn"`
+	Checks    []Check  `yaml:"checks" json:"checks"`
 }
 
 type Check struct {
@@ -40,13 +36,11 @@ type Check struct {
 }
 
 type Development struct {
-	DefaultTool  string             `yaml:"default_tool" json:"defaultTool"`
-	EnabledTools []string           `yaml:"enabled_tools" json:"enabledTools"`
-	Tools        map[string]ToolDef `yaml:"tools" json:"tools"`
+	DefaultTool string             `yaml:"default_tool" json:"defaultTool"`
+	Tools       map[string]ToolDef `yaml:"tools" json:"tools"`
 }
 type ToolDef struct {
 	Executable                 string `yaml:"executable" json:"executable"`
-	LaunchMode                 string `yaml:"launch_mode" json:"launchMode"`
 	LoadAdditionalInstructions bool   `yaml:"load_additional_instructions" json:"loadAdditionalInstructions"`
 }
 type Execution struct {

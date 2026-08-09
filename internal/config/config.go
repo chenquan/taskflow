@@ -180,28 +180,16 @@ func validateDevelopment(development domain.Development) error {
 	if development.DefaultTool == "" {
 		return fmt.Errorf("development.default_tool is required")
 	}
-	enabled := map[string]bool{}
-	for _, name := range development.EnabledTools {
-		if enabled[name] {
-			return fmt.Errorf("duplicate enabled development tool %q", name)
-		}
-		enabled[name] = true
+	for name, def := range development.Tools {
 		if name != "codex" && name != "claude" {
 			return fmt.Errorf("unsupported development tool %q", name)
-		}
-		def, ok := development.Tools[name]
-		if !ok {
-			return fmt.Errorf("enabled development tool %q has no definition", name)
 		}
 		if strings.TrimSpace(def.Executable) == "" {
 			return fmt.Errorf("development tool %q executable is required", name)
 		}
-		if def.LaunchMode != "direct" {
-			return fmt.Errorf("development tool %q has unsupported launch mode %q", name, def.LaunchMode)
-		}
 	}
-	if !enabled[development.DefaultTool] {
-		return fmt.Errorf("development.default_tool %q is not enabled", development.DefaultTool)
+	if _, ok := development.Tools[development.DefaultTool]; !ok {
+		return fmt.Errorf("development.default_tool %q has no definition", development.DefaultTool)
 	}
 	return nil
 }

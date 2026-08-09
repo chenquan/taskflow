@@ -102,8 +102,6 @@ version: 1
 
 task:
   id: REFUND-123
-  title: 订单部分退款
-  description: 支持订单部分退款，并保持现有支付接口兼容
   root: /Users/me/tasks/REFUND-123
 
 primary: order-service
@@ -114,8 +112,6 @@ repositories:
     base: origin/main
     branch: feature/refund-123
     worktree: worktrees/order-service
-    role: 订单退款业务规则和接口
-    contract_owner: true
     depends_on: []
     checks:
       - name: test
@@ -128,8 +124,6 @@ repositories:
     base: origin/main
     branch: feature/refund-123
     worktree: worktrees/payment-sdk
-    role: 支付客户端退款接口
-    contract_owner: false
     depends_on: [order-service]
     checks:
       - name: test
@@ -139,15 +133,11 @@ repositories:
 
 development:
   default_tool: codex
-  enabled_tools: [codex, claude]
   tools:
     codex:
       executable: codex
-      launch_mode: direct
-      load_additional_instructions: false
     claude:
       executable: claude
-      launch_mode: direct
       load_additional_instructions: true
 
 execution:
