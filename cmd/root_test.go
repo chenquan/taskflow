@@ -24,7 +24,14 @@ func TestVersionUsesCobraCommand(t *testing.T) {
 
 func TestTasksRootDefaultsToCurrentDirectory(t *testing.T) {
 	workspace := t.TempDir()
-	t.Chdir(workspace)
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatal(err)
+	}
 	repo := filepath.Join(workspace, "repo")
 	for _, args := range [][]string{
 		{"init", repo},

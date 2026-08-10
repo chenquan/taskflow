@@ -17,7 +17,7 @@ Taskflow 不管理需求、AI 会话、提交、推送、PR、合并、发布或
 
 ## 安装
 
-环境要求：Go 1.25 或更高版本、Git，以及可选的 `codex` 或 `claude` 可执行文件。
+环境要求：Go 1.22 或更高版本、Git，以及可选的 `codex` 或 `claude` 可执行文件。
 
 ```bash
 go install github.com/chenquan/taskflow@latest
