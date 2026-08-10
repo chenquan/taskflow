@@ -80,6 +80,5 @@ taskflow --json --tasks-root <tasks-root> status <task-id>
 
 - After a partial start, inspect status/state, fix the external cause, and rerun the same `start --execute`; do not delete state or worktrees to force recovery.
 - Preserve state on `STATE_CONFLICT`, `STATE_INCOMPATIBLE`, lock, branch, or worktree diagnostics and propose the smallest non-destructive correction.
-- This release has a breaking configuration/state contract; do not attempt to migrate old task files. Reinitialize tasks for the current schema.
 - Commit, pull, push, PR, merge, archive, release, and cleanup are separate user-authorized workflows outside Taskflow.
 - After every command, report the concrete result and the smallest safe next command.
