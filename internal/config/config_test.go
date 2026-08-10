@@ -10,10 +10,10 @@ import (
 )
 
 func task(root string) domain.Task {
-	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}}}
+	return domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: "A", Root: root}, Repositories: []domain.Repository{{Name: "one", Source: root}}}
 }
 
-func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T) {
+func TestLoadRejectsRemovedAndUnknownFields(t *testing.T) {
 	d := t.TempDir()
 	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
@@ -24,19 +24,14 @@ func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "taskflow.yaml")
-	legacy := strings.Replace(string(raw), "execution: {}", "execution:\n    create_openspec_change: true", 1)
-	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
+	removed := string(raw) + "\ncreate_openspec_change: true\n"
+	if err := os.WriteFile(path, []byte(removed), 0644); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("expected legacy configuration compatibility, got %v", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "create_openspec_change") {
+		t.Fatalf("expected removed field rejection, got %v", err)
 	}
-	normalized, err := Marshal(loaded)
-	if err != nil || strings.Contains(string(normalized), "create_openspec_change") {
-		t.Fatalf("legacy field survived normalized output: %s (%v)", normalized, err)
-	}
-	stale := legacy + "\nunknown_field: true\n"
+	stale := string(raw) + "\nunknown_field: true\n"
 	if err := os.WriteFile(path, []byte(stale), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -45,20 +40,15 @@ func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T
 	}
 }
 
-func TestValidateDevelopmentPolicy(t *testing.T) {
+func TestLoadRejectsRemovedDevelopmentConfiguration(t *testing.T) {
 	d := t.TempDir()
-	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
+	path := filepath.Join(d, "taskflow.yaml")
+	raw := "task:\n  id: A\nrepositories:\n  - name: one\n    source: " + d + "\ndevelopment:\n  default_tool: codex\n"
+	if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
+		t.Fatal(err)
 	}
-	v := task(d)
-	v.Development.DefaultTool = "claude"
-	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "no definition") {
-		t.Fatalf("expected missing default definition rejection, got %v", err)
-	}
-	v = task(d)
-	v.Development.Tools["unknown"] = domain.ToolDef{Executable: "unknown"}
-	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "unsupported development tool") {
-		t.Fatalf("expected unsupported tool rejection, got %v", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "development") {
+		t.Fatalf("expected removed configuration rejection, got %v", err)
 	}
 }
 func TestValidateDefaults(t *testing.T) {
@@ -75,16 +65,15 @@ func TestValidateDefaults(t *testing.T) {
 	}
 }
 
-func TestValidateDerivesVersionAndPrimary(t *testing.T) {
+func TestValidateDerivesVersion(t *testing.T) {
 	d := t.TempDir()
 	v := task(d)
 	v.Version = 0
-	v.Primary = ""
 	if err := Validate(&v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Version != domain.ConfigVersion || v.Primary != "one" {
-		t.Fatalf("version=%d primary=%q", v.Version, v.Primary)
+	if v.Version != domain.ConfigVersion {
+		t.Fatalf("version=%d", v.Version)
 	}
 }
 func TestValidateCycle(t *testing.T) {

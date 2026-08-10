@@ -35,8 +35,8 @@ func New() Service {
 }
 
 type InitOptions struct {
-	TasksRoot, TaskID, Primary string
-	Repositories               []string
+	TasksRoot, TaskID string
+	Repositories      []string
 }
 
 func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report.ExitCode) {
@@ -73,11 +73,7 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 		}
 		repos = append(repos, domain.Repository{Name: parts[0], Source: source, Worktree: filepath.Join("worktrees", parts[0])})
 	}
-	primary := o.Primary
-	if primary == "" {
-		primary = repos[0].Name
-	}
-	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: root}, Primary: primary, Repositories: repos, Development: domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}, "claude": {Executable: "claude", LoadAdditionalInstructions: true}}}}
+	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: root}, Repositories: repos}
 	if err = config.Validate(&t); err != nil {
 		res.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
 		return res, report.ExitConfig
@@ -97,6 +93,15 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 	if _, err = os.Stat(p); err == nil {
 		existing, e := config.Load(p)
 		if e == nil && equivalent(existing, t) {
+			_, exists, stateErr := loadStartState(existing)
+			if stateErr != nil || !exists {
+				message := "state file is missing; reinitialize the task in an empty directory"
+				if stateErr != nil {
+					message = stateErr.Error()
+				}
+				res.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: message})
+				return res, report.ExitConfig
+			}
 			res.Data = map[string]any{"path": taskRoot, "initialized": false}
 			return res, report.ExitOK
 		}
@@ -112,7 +117,7 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 			}
 		}
 	}
-	if err = writeTask(t, s, ctx); err != nil {
+	if err = writeTask(t); err != nil {
 		res.Fail(report.Diagnostic{Code: "WRITE_TASK_FAILED", Message: err.Error()})
 		return res, report.ExitExecution
 	}
@@ -124,7 +129,7 @@ func equivalent(a, b domain.Task) bool {
 	bb, _ := config.Marshal(b)
 	return string(ab) == string(bb)
 }
-func writeTask(t domain.Task, s Service, ctx context.Context) error {
+func writeTask(t domain.Task) error {
 	root := t.Task.Root
 	raw, err := config.Marshal(t)
 	if err != nil {
@@ -133,31 +138,25 @@ func writeTask(t domain.Task, s Service, ctx context.Context) error {
 	if err = fsx.AtomicWrite(filepath.Join(root, "taskflow.yaml"), raw, 0644); err != nil {
 		return err
 	}
-	inv := domain.Inventory{SchemaVersion: 1, TaskID: t.Task.ID}
-	for _, r := range t.Repositories {
-		info, e := s.Git.Inspect(ctx, r.Source)
-		if e != nil {
-			return e
-		}
-		inv.Repositories = append(inv.Repositories, domain.RepositoryFacts{Name: r.Name, Root: info.Root, Remote: info.Remote, DefaultBranch: info.DefaultBranch})
+	state := domain.State{SchemaVersion: domain.StateSchemaVersion, TaskID: t.Task.ID, Phase: "initialized", UpdatedAt: time.Now().UTC()}
+	b, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
 	}
-	state := domain.State{SchemaVersion: 1, TaskID: t.Task.ID, Phase: "initialized", UpdatedAt: time.Now().UTC()}
-	for name, value := range map[string]any{"inventory.json": inv, "state.json": state} {
-		b, e := json.MarshalIndent(value, "", "  ")
-		if e != nil {
-			return e
-		}
-		if e = fsx.AtomicWrite(filepath.Join(root, ".taskflow", name), append(b, '\n'), 0644); e != nil {
-			return e
-		}
-	}
-	return nil
+	return fsx.AtomicWrite(filepath.Join(root, ".taskflow", "state.json"), append(b, '\n'), 0644)
 }
 func (s Service) Load(tasksRoot, taskID string) (domain.Task, error) {
 	if err := config.ValidateTaskID(taskID); err != nil {
 		return domain.Task{}, err
 	}
-	return config.Load(config.Path(tasksRoot, taskID))
+	task, err := config.Load(config.Path(tasksRoot, taskID))
+	if err != nil {
+		return domain.Task{}, err
+	}
+	if task.Task.ID != taskID {
+		return domain.Task{}, fmt.Errorf("task.id %q does not match task directory %q", task.Task.ID, taskID)
+	}
+	return task, nil
 }
 
 type RepoAddOptions struct {
@@ -169,7 +168,6 @@ type RepoAddOptions struct {
 type repoAddPlan struct {
 	repository domain.Repository
 	merged     domain.Task
-	inventory  domain.Inventory
 	state      domain.State
 	digest     string
 	actions    []plan.Item
@@ -234,7 +232,7 @@ func (s Service) prepareRepoAdd(ctx context.Context, t domain.Task, o RepoAddOpt
 	if err != nil {
 		return empty, &report.Diagnostic{Code: "REPOSITORY_NOT_FOUND", Repo: name, Message: err.Error()}, report.ExitConfig
 	}
-	info, err := s.Git.Inspect(ctx, source)
+	_, err = s.Git.Inspect(ctx, source)
 	if err != nil {
 		return empty, &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: name, Message: err.Error()}, report.ExitEnvironment
 	}
@@ -265,7 +263,7 @@ func (s Service) prepareRepoAdd(ctx context.Context, t domain.Task, o RepoAddOpt
 		return empty, &report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()}, report.ExitExecution
 	}
 	if !exists {
-		state = domain.State{SchemaVersion: 1, TaskID: t.Task.ID, Phase: "initialized", Repositories: map[string]domain.RepositoryState{}}
+		return empty, &report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: "state file is missing; reinitialize the task in an empty directory"}, report.ExitExecution
 	}
 	switch state.Phase {
 	case "initialized", "started", "failed":
@@ -276,11 +274,6 @@ func (s Service) prepareRepoAdd(ctx context.Context, t domain.Task, o RepoAddOpt
 	if err != nil {
 		return empty, &report.Diagnostic{Code: "CONFIG_DIGEST_FAILED", Message: err.Error()}, report.ExitExecution
 	}
-	inventory, err := loadInventory(t)
-	if err != nil {
-		return empty, &report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()}, report.ExitExecution
-	}
-	inventory.Repositories = append(inventory.Repositories, domain.RepositoryFacts{Name: repository.Name, Root: info.Root, Remote: info.Remote, DefaultBranch: info.DefaultBranch})
 	now := time.Now().UTC()
 	if state.Repositories == nil {
 		state.Repositories = map[string]domain.RepositoryState{}
@@ -311,7 +304,7 @@ func (s Service) prepareRepoAdd(ctx context.Context, t domain.Task, o RepoAddOpt
 			actions = append(actions, item)
 		}
 	}
-	return repoAddPlan{repository: repository, merged: merged, inventory: inventory, state: state, digest: digest, actions: actions}, nil, report.ExitOK
+	return repoAddPlan{repository: repository, merged: merged, state: state, digest: digest, actions: actions}, nil, report.ExitOK
 }
 
 type StartOptions struct {
@@ -363,9 +356,10 @@ func (s Service) Start(ctx context.Context, t domain.Task, o StartOptions) (repo
 	}
 	now := time.Now().UTC()
 	if !exists {
-		state = domain.State{SchemaVersion: 1, TaskID: t.Task.ID, Repositories: map[string]domain.RepositoryState{}}
+		res.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: "state file is missing; reinitialize the task in an empty directory"})
+		return res, report.ExitExecution
 	}
-	state.SchemaVersion = 1
+	state.SchemaVersion = domain.StateSchemaVersion
 	state.TaskID = t.Task.ID
 	state.ConfigDigest = digest
 	state.Phase = "starting"
@@ -619,8 +613,8 @@ func loadStartState(t domain.Task) (domain.State, bool, error) {
 	if err = json.Unmarshal(raw, &state); err != nil {
 		return domain.State{}, true, fmt.Errorf("decode state: %w", err)
 	}
-	if state.SchemaVersion != 1 || state.TaskID != t.Task.ID {
-		return domain.State{}, true, fmt.Errorf("state schema or task ID is incompatible")
+	if state.SchemaVersion != domain.StateSchemaVersion || state.TaskID != t.Task.ID {
+		return domain.State{}, true, fmt.Errorf("state schema or task ID is incompatible; reinitialize the task in an empty directory")
 	}
 	return state, true, nil
 }
@@ -631,18 +625,6 @@ func samePath(a, b string) bool {
 	}
 	bb, e := filepath.Abs(b)
 	return e == nil && aa == bb
-}
-
-func loadInventory(t domain.Task) (domain.Inventory, error) {
-	raw, err := os.ReadFile(filepath.Join(t.Task.Root, ".taskflow", "inventory.json"))
-	if err != nil {
-		return domain.Inventory{}, err
-	}
-	var inventory domain.Inventory
-	if err = json.Unmarshal(raw, &inventory); err != nil {
-		return domain.Inventory{}, fmt.Errorf("decode inventory: %w", err)
-	}
-	return inventory, nil
 }
 
 type taskFileSnapshot struct {
@@ -680,13 +662,8 @@ func restoreTaskFiles(snapshots ...taskFileSnapshot) {
 
 func writeRepoAdd(t domain.Task, p repoAddPlan) error {
 	configPath := filepath.Join(t.Task.Root, "taskflow.yaml")
-	inventoryPath := filepath.Join(t.Task.Root, ".taskflow", "inventory.json")
 	statePath := filepath.Join(t.Task.Root, ".taskflow", "state.json")
 	configSnap, err := snapshotTaskFile(configPath)
-	if err != nil {
-		return err
-	}
-	inventorySnap, err := snapshotTaskFile(inventoryPath)
 	if err != nil {
 		return err
 	}
@@ -698,24 +675,16 @@ func writeRepoAdd(t domain.Task, p repoAddPlan) error {
 	if err != nil {
 		return err
 	}
-	inventoryBytes, err := json.MarshalIndent(p.inventory, "", "  ")
-	if err != nil {
-		return err
-	}
 	stateBytes, err := json.MarshalIndent(p.state, "", "  ")
 	if err != nil {
 		return err
 	}
 	if err = fsx.AtomicWrite(configPath, configBytes, 0644); err != nil {
-		restoreTaskFiles(configSnap, inventorySnap, stateSnap)
-		return err
-	}
-	if err = fsx.AtomicWrite(inventoryPath, append(inventoryBytes, '\n'), 0644); err != nil {
-		restoreTaskFiles(configSnap, inventorySnap, stateSnap)
+		restoreTaskFiles(configSnap, stateSnap)
 		return err
 	}
 	if err = fsx.AtomicWrite(statePath, append(stateBytes, '\n'), 0644); err != nil {
-		restoreTaskFiles(configSnap, inventorySnap, stateSnap)
+		restoreTaskFiles(configSnap, stateSnap)
 		return err
 	}
 	return nil
@@ -731,13 +700,36 @@ func fetchRemote(base string) string {
 func (s Service) Open(ctx context.Context, t domain.Task, tool string, extraArgs []string, stdin io.Reader, stdout, stderr io.Writer) (report.Result, report.ExitCode) {
 	r := report.New("open", t.Task.ID)
 	if tool == "" {
-		tool = t.Development.DefaultTool
+		tool = "codex"
+	}
+	state, exists, err := loadStartState(t)
+	if err != nil {
+		r.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()})
+		return r, report.ExitExecution
+	}
+	if !exists || state.Phase != "started" {
+		phase := "missing"
+		if exists {
+			phase = state.Phase
+		}
+		r.Fail(report.Diagnostic{Code: "WORKSPACE_NOT_STARTED", Message: "task workspace phase is " + phase + "; run start --execute first"})
+		return r, report.ExitConfig
+	}
+	if diagnostic, code := s.preflightOpen(ctx, t); diagnostic != nil {
+		r.Fail(*diagnostic)
+		return r, code
 	}
 	spec, err := devtool.AdapterImpl{Tool: tool}.Build(t, extraArgs)
 	if err != nil {
 		r.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: err.Error()})
 		return r, report.ExitConfig
 	}
+	resolved, err := s.Runner.LookPath(spec.Executable)
+	if err != nil || strings.TrimSpace(resolved) == "" {
+		r.Fail(report.Diagnostic{Code: "TOOL_NOT_FOUND", Message: fmt.Sprintf("%s executable was not found in PATH", tool)})
+		return r, report.ExitEnvironment
+	}
+	spec.Executable = resolved
 	res, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: spec.Executable, Args: spec.Args, Dir: spec.Dir, Stdin: stdin, Stdout: stdout, Stderr: stderr, Env: spec.Env})
 	if err != nil {
 		r.Data = map[string]any{"tool": tool, "executable": spec.Executable, "childExitCode": res.ExitCode}
@@ -746,6 +738,24 @@ func (s Service) Open(ctx context.Context, t domain.Task, tool string, extraArgs
 	}
 	r.Data = spec
 	return r, report.ExitOK
+}
+
+func (s Service) preflightOpen(ctx context.Context, task domain.Task) (*report.Diagnostic, report.ExitCode) {
+	for _, repository := range task.Repositories {
+		sourceInfo, err := s.Git.Inspect(ctx, repository.Source)
+		if err != nil || sourceInfo.CommonDir == "" {
+			return &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: fmt.Sprintf("inspect configured source: %v", err)}, report.ExitEnvironment
+		}
+		target := filepath.Join(task.Task.Root, repository.Worktree)
+		targetInfo, err := s.Git.Inspect(ctx, target)
+		if err != nil {
+			return &report.Diagnostic{Code: "WORKTREE_INVALID", Repo: repository.Name, Message: err.Error()}, report.ExitConflict
+		}
+		if targetInfo.CommonDir != sourceInfo.CommonDir || targetInfo.Branch != repository.Branch {
+			return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("worktree %s does not match source and branch %s", target, repository.Branch)}, report.ExitConflict
+		}
+	}
+	return nil, report.ExitOK
 }
 func (s Service) Status(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
 	r := report.New("status", t.Task.ID)
@@ -759,44 +769,19 @@ func (s Service) Status(ctx context.Context, t domain.Task) (report.Result, repo
 	validation, _ := loadValidationReport(t)
 	digest, _ := configDigest(t)
 	stale := validation != nil && validation.ConfigDigest != digest
-	data.ValidationStale = stale
-	if !stale {
-		data.LastValidation = validation
-	}
-	statusByName := map[string]int{}
+	data.ValidationConfigStale = stale
+	data.LastValidation = validation
 	for _, repository := range t.Repositories {
 		worktree := filepath.Join(t.Task.Root, repository.Worktree)
 		info, e := s.Git.Inspect(ctx, worktree)
-		entry := domain.RepositoryStatus{Name: repository.Name, Worktree: worktree, DependencyReady: true}
+		entry := domain.RepositoryStatus{Name: repository.Name, Worktree: worktree}
 		if e != nil {
 			entry.Error = e.Error()
 		} else {
 			entry.Branch, entry.Head, entry.Dirty, entry.DirtyFiles = info.Branch, info.Head, info.Dirty, info.DirtyFiles
 			entry.Upstream, entry.Ahead, entry.Behind = info.Upstream, info.Ahead, info.Behind
-			entry.Pushed = info.Upstream != "" && info.Ahead == 0
-		}
-		if !stale && validation != nil {
-			if repositoryValidation, ok := validation.Repositories[repository.Name]; ok {
-				value := repositoryValidation.OK
-				entry.LastValidationOK = &value
-			}
 		}
 		data.Repositories = append(data.Repositories, entry)
-		statusByName[repository.Name] = len(data.Repositories) - 1
-	}
-	for index := range data.Repositories {
-		repository := t.Repositories[index]
-		for _, dependency := range repository.DependsOn {
-			dependencyIndex, found := statusByName[dependency]
-			if !found {
-				data.Repositories[index].DependencyReady = false
-				continue
-			}
-			dependencyStatus := data.Repositories[dependencyIndex]
-			if dependencyStatus.Error != "" || dependencyStatus.Head == "" {
-				data.Repositories[index].DependencyReady = false
-			}
-		}
 	}
 	r.Data = data
 	return r, report.ExitOK
@@ -809,6 +794,15 @@ func (s Service) ValidateScoped(ctx context.Context, t domain.Task, only string)
 }
 func (s Service) validate(ctx context.Context, t domain.Task, only string) (report.Result, report.ExitCode) {
 	r := report.New("validate", t.Task.ID)
+	_, exists, stateErr := loadStartState(t)
+	if stateErr != nil {
+		r.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: stateErr.Error()})
+		return r, report.ExitExecution
+	}
+	if !exists {
+		r.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: "state file is missing; reinitialize the task in an empty directory"})
+		return r, report.ExitExecution
+	}
 	ordered, err := plan.Order(t.Repositories)
 	if err != nil {
 		r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
@@ -826,7 +820,7 @@ func (s Service) validate(ctx context.Context, t domain.Task, only string) (repo
 		r.Fail(report.Diagnostic{Code: "CONFIG_DIGEST_FAILED", Message: err.Error()})
 		return r, report.ExitExecution
 	}
-	validation := domain.ValidationReport{SchemaVersion: 1, TaskID: t.Task.ID, ConfigDigest: digest, CompletedAt: time.Now().UTC(), OK: true, Repositories: map[string]domain.RepositoryValidation{}}
+	validation := domain.ValidationReport{SchemaVersion: domain.ValidationSchemaVersion, TaskID: t.Task.ID, ConfigDigest: digest, CompletedAt: time.Now().UTC(), OK: true, Repositories: map[string]domain.RepositoryValidation{}}
 	for _, repository := range ordered {
 		validation.Scope = append(validation.Scope, repository.Name)
 		worktree := filepath.Join(t.Task.Root, repository.Worktree)
@@ -894,7 +888,7 @@ func loadValidationReport(task domain.Task) (*domain.ValidationReport, error) {
 	if err = json.Unmarshal(raw, &validation); err != nil {
 		return nil, err
 	}
-	if validation.SchemaVersion != 1 || validation.TaskID != task.Task.ID || validation.Repositories == nil {
+	if validation.SchemaVersion != domain.ValidationSchemaVersion || validation.TaskID != task.Task.ID || validation.Repositories == nil {
 		return nil, fmt.Errorf("validation report is incompatible")
 	}
 	return &validation, nil

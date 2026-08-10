@@ -29,7 +29,7 @@ func TestLifecycleRunsWithoutOpenSpec(t *testing.T) {
 		}
 		return output.String()
 	}
-	run("init", "task", "--primary", "repo", "--repo", "repo="+repo)
+	run("init", "task", "--repo", "repo="+repo)
 	raw, err := os.ReadFile(filepath.Join(tasks, "task", "taskflow.yaml"))
 	if err != nil || strings.Contains(string(raw), "openspec") {
 		t.Fatalf("OpenSpec leaked into task configuration: %s (%v)", raw, err)

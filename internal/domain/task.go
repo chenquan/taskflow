@@ -2,14 +2,16 @@ package domain
 
 import "time"
 
-const ConfigVersion = 1
+const (
+	ConfigVersion           = 2
+	StateSchemaVersion      = 2
+	ValidationSchemaVersion = 2
+)
 
 type Task struct {
 	Version      int          `yaml:"-" json:"-"`
 	Task         TaskInfo     `yaml:"task" json:"task"`
-	Primary      string       `yaml:"-" json:"-"`
 	Repositories []Repository `yaml:"repositories" json:"repositories"`
-	Development  Development  `yaml:"development" json:"development"`
 	Execution    Execution    `yaml:"execution" json:"execution"`
 }
 
@@ -35,28 +37,8 @@ type Check struct {
 	Timeout    string   `yaml:"timeout" json:"timeout"`
 }
 
-type Development struct {
-	DefaultTool string             `yaml:"default_tool" json:"defaultTool"`
-	Tools       map[string]ToolDef `yaml:"tools" json:"tools"`
-}
-type ToolDef struct {
-	Executable                 string `yaml:"executable" json:"executable"`
-	LoadAdditionalInstructions bool   `yaml:"load_additional_instructions" json:"loadAdditionalInstructions"`
-}
 type Execution struct {
 	Fetch bool `yaml:"fetch" json:"fetch"`
-}
-
-type Inventory struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	TaskID        string            `json:"taskID"`
-	Repositories  []RepositoryFacts `json:"repositories"`
-}
-type RepositoryFacts struct {
-	Name          string `json:"name"`
-	Root          string `json:"root"`
-	Remote        string `json:"remote,omitempty"`
-	DefaultBranch string `json:"defaultBranch,omitempty"`
 }
 type State struct {
 	SchemaVersion int                        `json:"schemaVersion"`
@@ -113,24 +95,21 @@ type ValidationReport struct {
 }
 
 type RepositoryStatus struct {
-	Name             string `json:"name"`
-	Worktree         string `json:"worktree"`
-	Branch           string `json:"branch,omitempty"`
-	Head             string `json:"head,omitempty"`
-	Dirty            bool   `json:"dirty"`
-	DirtyFiles       int    `json:"dirtyFiles"`
-	Upstream         string `json:"upstream,omitempty"`
-	Ahead            int    `json:"ahead"`
-	Behind           int    `json:"behind"`
-	Pushed           bool   `json:"pushed"`
-	DependencyReady  bool   `json:"dependencyReady"`
-	LastValidationOK *bool  `json:"lastValidationOK,omitempty"`
-	Error            string `json:"error,omitempty"`
+	Name       string `json:"name"`
+	Worktree   string `json:"worktree"`
+	Branch     string `json:"branch,omitempty"`
+	Head       string `json:"head,omitempty"`
+	Dirty      bool   `json:"dirty"`
+	DirtyFiles int    `json:"dirtyFiles"`
+	Upstream   string `json:"upstream,omitempty"`
+	Ahead      int    `json:"ahead"`
+	Behind     int    `json:"behind"`
+	Error      string `json:"error,omitempty"`
 }
 
 type StatusData struct {
-	Phase           string             `json:"phase"`
-	Repositories    []RepositoryStatus `json:"repositories"`
-	LastValidation  *ValidationReport  `json:"lastValidation,omitempty"`
-	ValidationStale bool               `json:"validationStale"`
+	Phase                 string             `json:"phase"`
+	Repositories          []RepositoryStatus `json:"repositories"`
+	LastValidation        *ValidationReport  `json:"lastValidation,omitempty"`
+	ValidationConfigStale bool               `json:"validationConfigStale"`
 }
