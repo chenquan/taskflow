@@ -207,7 +207,7 @@ func TestE2EMultiRepositoryLifecycleAndReadiness(t *testing.T) {
 	owner := makeSafetyRepo(t, filepath.Join(f.root, "仓库 owner"))
 	sdk := makeSafetyRepo(t, filepath.Join(f.root, "sdk repo"))
 	ui := makeSafetyRepo(t, filepath.Join(f.root, "界面 repo"))
-	if out, err := runSafetyCobra(t, f.tasks, "init", "multi", "--primary", "owner", "--repo", "ui="+ui, "--repo", "sdk="+sdk, "--repo", "owner="+owner); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "multi", "--repo", "owner="+owner, "--repo", "ui="+ui, "--repo", "sdk="+sdk); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
 	mutateSafetyTask(t, f.tasks, "multi", func(task *domain.Task) {
@@ -253,7 +253,7 @@ func TestE2EMultiRepositoryLifecycleAndReadiness(t *testing.T) {
 func TestE2EPreflightAndLockConflictsPreserveState(t *testing.T) {
 	f := newSafetyFixture(t)
 	second := makeSafetyRepo(t, filepath.Join(f.root, "second"))
-	if out, err := runSafetyCobra(t, f.tasks, "init", "conflict", "--primary", "first", "--repo", "first="+f.repo, "--repo", "second="+second); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "conflict", "--repo", "first="+f.repo, "--repo", "second="+second); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
 	if err := os.MkdirAll(filepath.Join(f.tasks, "conflict", "worktrees", "second"), 0755); err != nil {
@@ -268,7 +268,7 @@ func TestE2EPreflightAndLockConflictsPreserveState(t *testing.T) {
 	if !bytes.Equal(before, safetyState(t, f.tasks, "conflict")) {
 		t.Fatal("preflight changed state")
 	}
-	if out, err := runSafetyCobra(t, f.tasks, "init", "locked", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "locked", "--repo", "repo="+f.repo); err != nil {
 		t.Fatalf("init lock: %v: %s", err, out)
 	}
 	lockedTask, err := config.Load(config.Path(f.tasks, "locked"))
@@ -297,7 +297,7 @@ func TestE2EPreflightAndLockConflictsPreserveState(t *testing.T) {
 
 func TestE2EValidation(t *testing.T) {
 	f := newSafetyFixture(t)
-	if out, err := runSafetyCobra(t, f.tasks, "init", "checks", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "checks", "--repo", "repo="+f.repo); err != nil {
 		t.Fatal(out, err)
 	}
 	mutateSafetyTask(t, f.tasks, "checks", func(task *domain.Task) {
@@ -333,7 +333,7 @@ func TestE2EValidation(t *testing.T) {
 
 func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 	f := newSafetyFixture(t)
-	if out, err := runSafetyCobra(t, f.tasks, "init", "broken", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "broken", "--repo", "repo="+f.repo); err != nil {
 		t.Fatal(out, err)
 	}
 	mutateSafetyTask(t, f.tasks, "broken", func(task *domain.Task) { task.Repositories[0].Branch = "not a valid branch" })
@@ -345,7 +345,7 @@ func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 		t.Fatal("failed start state was not persisted")
 	}
 
-	if out, err := runSafetyCobra(t, f.tasks, "init", "occupied", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "occupied", "--repo", "repo="+f.repo); err != nil {
 		t.Fatal(out, err)
 	}
 	occupiedTarget := filepath.Join(f.root, "existing-worktree")
@@ -357,11 +357,18 @@ func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 		t.Fatalf("branch conflict: %d %s", e2eCode(err), out)
 	}
 
-	if out, err := runSafetyCobra(t, f.tasks, "init", "tools", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "tools", "--repo", "repo="+f.repo); err != nil {
 		t.Fatal(out, err)
+	}
+	out, err = runSafetyCobra(t, f.tasks, "--json", "open", "tools")
+	if e2eCode(err) != int(report.ExitConfig) || !strings.Contains(out, "WORKSPACE_NOT_STARTED") || len(safetyLog(t, f.toolLog)) != 0 {
+		t.Fatalf("unstarted open: %d %s", e2eCode(err), out)
 	}
 	if out, err := runSafetyCobra(t, f.tasks, "start", "tools", "--execute"); err != nil {
 		t.Fatal(out, err)
+	}
+	if err := os.WriteFile(filepath.Join(f.tasks, "tools", "worktrees", "repo", "dirty.txt"), []byte("dirty"), 0644); err != nil {
+		t.Fatal(err)
 	}
 	if out, err := runSafetyCobra(t, f.tasks, "open", "tools", "--tool", "claude"); err != nil || !strings.Contains(out, "open: ok") {
 		t.Fatalf("open success: %v %s", err, out)
@@ -378,11 +385,24 @@ func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 	if got := safetyLog(t, f.toolLog); len(got) != 3 {
 		t.Fatalf("tool launches: %v", got)
 	}
+	beforeRejected := len(safetyLog(t, f.toolLog))
+	out, err = runSafetyCobra(t, f.tasks, "--json", "open", "tools", "--", "--worktree=other")
+	if e2eCode(err) != int(report.ExitConfig) || !strings.Contains(out, "INVALID_ARGUMENT") || len(safetyLog(t, f.toolLog)) != beforeRejected {
+		t.Fatalf("nested worktree open: %d %s", e2eCode(err), out)
+	}
+	worktree := filepath.Join(f.tasks, "tools", "worktrees", "repo")
+	if output, err := exec.Command("git", "-C", f.repo, "worktree", "remove", "--force", worktree).CombinedOutput(); err != nil {
+		t.Fatalf("remove tool worktree: %v: %s", err, output)
+	}
+	out, err = runSafetyCobra(t, f.tasks, "--json", "open", "tools")
+	if e2eCode(err) != int(report.ExitConflict) || !strings.Contains(out, "WORKTREE_INVALID") || len(safetyLog(t, f.toolLog)) != beforeRejected {
+		t.Fatalf("missing worktree open: %d %s", e2eCode(err), out)
+	}
 }
 
 func TestE2EOpenPassesThroughExtraArgsAndPermissionBypass(t *testing.T) {
 	f := newSafetyFixture(t)
-	if out, err := runSafetyCobra(t, f.tasks, "init", "passthru", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "passthru", "--repo", "repo="+f.repo); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
 	if out, err := runSafetyCobra(t, f.tasks, "start", "passthru", "--execute"); err != nil {
@@ -411,7 +431,7 @@ func TestE2EResumesCompletedActionsAndRejectsIncompatibleState(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	if out, err := runSafetyCobra(t, f.tasks, "init", "resume", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "resume", "--repo", "repo="+f.repo); err != nil {
 		t.Fatal(out, err)
 	}
 	mutateSafetyTask(t, f.tasks, "resume", func(task *domain.Task) {
@@ -485,10 +505,10 @@ func TestE2EIdempotentInitializationFetchAndUnknownRepository(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	if out, err := runSafetyCobra(t, f.tasks, "init", "fetch", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "fetch", "--repo", "repo="+f.repo); err != nil {
 		t.Fatal(out, err)
 	}
-	if out, err := runSafetyCobra(t, f.tasks, "init", "fetch", "--primary", "repo", "--repo", "repo="+f.repo); err != nil || !strings.Contains(out, `"initialized": false`) {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "fetch", "--repo", "repo="+f.repo); err != nil || !strings.Contains(out, `"initialized": false`) {
 		t.Fatalf("idempotent init: %v %s", err, out)
 	}
 	mutateSafetyTask(t, f.tasks, "fetch", func(task *domain.Task) {
@@ -508,18 +528,24 @@ func TestE2EIdempotentInitializationFetchAndUnknownRepository(t *testing.T) {
 
 func TestE2ECommandArgumentGuards(t *testing.T) {
 	f := newSafetyFixture(t)
-	for _, args := range [][]string{{"--json", "start", "missing", "--dry-run", "--execute"}, {"--json", "init", "../escape", "--primary", "repo", "--repo", "repo=" + f.repo}} {
+	for _, args := range [][]string{{"--json", "start", "missing", "--dry-run", "--execute"}, {"--json", "init", "../escape", "--repo", "repo=" + f.repo}} {
 		out, err := runSafetyCobra(t, f.tasks, args...)
 		if e2eCode(err) != int(report.ExitConfig) || !strings.Contains(out, "INVALID_") {
 			t.Fatalf("argument guard %v: %d %s", args, e2eCode(err), out)
 		}
+	}
+	if _, err := runSafetyCobra(t, f.tasks, "init", "removed-primary", "--primary", "repo", "--repo", "repo="+f.repo); err == nil {
+		t.Fatal("expected removed --primary flag to be rejected")
+	}
+	if _, err := os.Stat(filepath.Join(f.tasks, "removed-primary")); !os.IsNotExist(err) {
+		t.Fatalf("removed --primary mutated task root: %v", err)
 	}
 }
 
 func TestE2EAppendRepositoryAfterStart(t *testing.T) {
 	f := newSafetyFixture(t)
 	second := makeSafetyRepo(t, filepath.Join(f.root, "second"))
-	if out, err := runSafetyCobra(t, f.tasks, "init", "append", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "append", "--repo", "repo="+f.repo); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
 	if out, err := runSafetyCobra(t, f.tasks, "start", "append", "--execute"); err != nil {
@@ -568,13 +594,19 @@ func TestE2EAppendRepositoryAfterStart(t *testing.T) {
 	}
 
 	statusOut, _ := runSafetyCobra(t, f.tasks, "--json", "status", "append")
-	var statusData struct {
-		ValidationStale bool `json:"validationStale"`
+	statusResult := decodeSafety(t, statusOut)
+	for _, removed := range []string{`"pushed"`, `"dependencyReady"`, `"lastValidationOK"`, `"validationStale"`} {
+		if bytes.Contains(statusResult.Data, []byte(removed)) {
+			t.Fatalf("status retained removed field %s: %s", removed, statusResult.Data)
+		}
 	}
-	if err := json.Unmarshal(decodeSafety(t, statusOut).Data, &statusData); err != nil {
+	var statusData struct {
+		ValidationConfigStale bool `json:"validationConfigStale"`
+	}
+	if err := json.Unmarshal(statusResult.Data, &statusData); err != nil {
 		t.Fatal(err)
 	}
-	if !statusData.ValidationStale {
+	if !statusData.ValidationConfigStale {
 		t.Fatal("expected stale validation after append")
 	}
 
@@ -609,7 +641,7 @@ func TestE2EAppendRepositoryAfterStart(t *testing.T) {
 	if err := json.Unmarshal(decodeSafety(t, refreshOut).Data, &statusData); err != nil {
 		t.Fatal(err)
 	}
-	if statusData.ValidationStale {
+	if statusData.ValidationConfigStale {
 		t.Fatal("expected refreshed validation after validate")
 	}
 }
@@ -617,7 +649,7 @@ func TestE2EAppendRepositoryAfterStart(t *testing.T) {
 func TestE2EAppendRepositoryLockConflict(t *testing.T) {
 	f := newSafetyFixture(t)
 	second := makeSafetyRepo(t, filepath.Join(f.root, "second"))
-	if out, err := runSafetyCobra(t, f.tasks, "init", "locked-append", "--primary", "repo", "--repo", "repo="+f.repo); err != nil {
+	if out, err := runSafetyCobra(t, f.tasks, "init", "locked-append", "--repo", "repo="+f.repo); err != nil {
 		t.Fatalf("init: %v: %s", err, out)
 	}
 	task, err := config.Load(config.Path(f.tasks, "locked-append"))
@@ -661,7 +693,7 @@ func TestE2ECompiledBinaryAndInvalidJSON(t *testing.T) {
 		}
 		return string(out), err.(*exec.ExitError).ExitCode()
 	}
-	if out, code := run("init", "binary", "--primary", "repo", "--repo", "repo="+f.repo); code != 0 {
+	if out, code := run("init", "binary", "--repo", "repo="+f.repo); code != 0 {
 		t.Fatalf("init %d %s", code, out)
 	}
 	if out, code := run("start", "binary", "--execute"); code != 0 {

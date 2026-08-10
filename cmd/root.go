@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/chenquan/taskflow/internal/app"
+	"github.com/chenquan/taskflow/internal/config"
 	"github.com/chenquan/taskflow/internal/report"
 	"github.com/chenquan/taskflow/skills"
 	"github.com/spf13/cobra"
@@ -44,13 +46,11 @@ func NewRootCommand() *cobra.Command {
 		_, err := fmt.Fprintln(c.OutOrStdout(), Version)
 		return err
 	}})
-	var primary string
 	var repos []string
 	init := &cobra.Command{Use: "init <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
-		r, code := svc.Init(context.Background(), app.InitOptions{TasksRoot: tasksRoot, TaskID: args[0], Primary: primary, Repositories: repos})
+		r, code := svc.Init(context.Background(), app.InitOptions{TasksRoot: tasksRoot, TaskID: args[0], Repositories: repos})
 		return render(c, r, code)
 	}}
-	init.Flags().StringVar(&primary, "primary", "", "primary repository name")
 	init.Flags().StringSliceVar(&repos, "repo", nil, "repository name=path (repeatable)")
 	root.AddCommand(init)
 	var dryRun, execute bool
@@ -58,7 +58,7 @@ func NewRootCommand() *cobra.Command {
 		t, err := svc.Load(tasksRoot, args[0])
 		if err != nil {
 			r := report.New("start", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
+			r.Fail(loadDiagnostic(err))
 			return render(c, r, report.ExitConfig)
 		}
 		if dryRun && execute {
@@ -77,7 +77,7 @@ func NewRootCommand() *cobra.Command {
 		t, e := svc.Load(tasksRoot, args[0])
 		if e != nil {
 			r := report.New("open", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: e.Error()})
+			r.Fail(loadDiagnostic(e))
 			return render(c, r, report.ExitConfig)
 		}
 		r, code := svc.Open(context.Background(), t, tool, args[1:], c.InOrStdin(), c.OutOrStdout(), c.ErrOrStderr())
@@ -89,7 +89,7 @@ func NewRootCommand() *cobra.Command {
 		t, e := svc.Load(tasksRoot, args[0])
 		if e != nil {
 			r := report.New("status", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: e.Error()})
+			r.Fail(loadDiagnostic(e))
 			return render(c, r, report.ExitConfig)
 		}
 		r, code := svc.Status(context.Background(), t)
@@ -100,7 +100,7 @@ func NewRootCommand() *cobra.Command {
 		t, e := svc.Load(tasksRoot, args[0])
 		if e != nil {
 			r := report.New("validate", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: e.Error()})
+			r.Fail(loadDiagnostic(e))
 			return render(c, r, report.ExitConfig)
 		}
 		r, code := svc.ValidateScoped(context.Background(), t, validateRepo)
@@ -116,7 +116,7 @@ func NewRootCommand() *cobra.Command {
 		t, e := svc.Load(tasksRoot, args[0])
 		if e != nil {
 			r := report.New("repo add", args[0])
-			r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: e.Error()})
+			r.Fail(loadDiagnostic(e))
 			return render(c, r, report.ExitConfig)
 		}
 		r, code := svc.RepoAdd(context.Background(), t, app.RepoAddOptions{Repository: repoAddRepo, DependsOn: repoAddDepends, DryRun: repoAddDryRun})
@@ -149,6 +149,14 @@ func NewRootCommand() *cobra.Command {
 	skillCmd.AddCommand(installSkills)
 	root.AddCommand(skillCmd)
 	return root
+}
+
+func loadDiagnostic(err error) report.Diagnostic {
+	code := "INVALID_CONFIGURATION"
+	if errors.Is(err, config.ErrLegacyConfiguration) {
+		code = "LEGACY_CONFIGURATION_UNSUPPORTED"
+	}
+	return report.Diagnostic{Code: code, Message: err.Error()}
 }
 
 func skillTargets(project bool) ([]skills.Target, error) {

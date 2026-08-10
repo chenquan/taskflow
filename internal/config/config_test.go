@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"github.com/chenquan/taskflow/internal/domain"
 	"os"
 	"os/exec"
@@ -10,7 +11,7 @@ import (
 )
 
 func task(root string) domain.Task {
-	return domain.Task{Version: 1, Task: domain.TaskInfo{ID: "A", Root: root}, Primary: "one", Repositories: []domain.Repository{{Name: "one", Source: root}}, Development: domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}}}
+	return domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: "A", Root: root}, Repositories: []domain.Repository{{Name: "one", Source: root}}}
 }
 
 func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T) {
@@ -45,20 +46,20 @@ func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T
 	}
 }
 
-func TestValidateDevelopmentPolicy(t *testing.T) {
+func TestLoadRejectsLegacyDevelopmentConfiguration(t *testing.T) {
 	d := t.TempDir()
-	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
+	path := filepath.Join(d, "taskflow.yaml")
+	raw := "task:\n  id: A\nrepositories:\n  - name: one\n    source: " + d + "\ndevelopment:\n  default_tool: codex\n"
+	if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
+		t.Fatal(err)
 	}
-	v := task(d)
-	v.Development.DefaultTool = "claude"
-	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "no definition") {
-		t.Fatalf("expected missing default definition rejection, got %v", err)
+	before, _ := os.ReadFile(path)
+	if _, err := Load(path); !errors.Is(err, ErrLegacyConfiguration) {
+		t.Fatalf("expected legacy configuration error, got %v", err)
 	}
-	v = task(d)
-	v.Development.Tools["unknown"] = domain.ToolDef{Executable: "unknown"}
-	if err := Validate(&v); err == nil || !strings.Contains(err.Error(), "unsupported development tool") {
-		t.Fatalf("expected unsupported tool rejection, got %v", err)
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Fatal("legacy configuration was modified")
 	}
 }
 func TestValidateDefaults(t *testing.T) {
@@ -75,16 +76,15 @@ func TestValidateDefaults(t *testing.T) {
 	}
 }
 
-func TestValidateDerivesVersionAndPrimary(t *testing.T) {
+func TestValidateDerivesVersion(t *testing.T) {
 	d := t.TempDir()
 	v := task(d)
 	v.Version = 0
-	v.Primary = ""
 	if err := Validate(&v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Version != domain.ConfigVersion || v.Primary != "one" {
-		t.Fatalf("version=%d primary=%q", v.Version, v.Primary)
+	if v.Version != domain.ConfigVersion {
+		t.Fatalf("version=%d", v.Version)
 	}
 }
 func TestValidateCycle(t *testing.T) {

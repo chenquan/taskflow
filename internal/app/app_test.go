@@ -13,6 +13,7 @@ import (
 
 	"github.com/chenquan/taskflow/internal/domain"
 	"github.com/chenquan/taskflow/internal/execx"
+	"github.com/chenquan/taskflow/internal/git"
 	"github.com/chenquan/taskflow/internal/report"
 )
 
@@ -34,13 +35,19 @@ func TestLifecycleDoesNotRequireRequirementFile(t *testing.T) {
 	repo := makeGitRepo(t)
 	tasks := t.TempDir()
 	s := New()
-	options := InitOptions{TasksRoot: tasks, TaskID: "TASK-1", Primary: "repo", Repositories: []string{"repo=" + repo}}
+	options := InitOptions{TasksRoot: tasks, TaskID: "TASK-1", Repositories: []string{"repo=" + repo}}
 	if result, code := s.Init(context.Background(), options); code != report.ExitOK || !result.OK {
 		t.Fatalf("init: code=%d result=%#v", code, result)
 	}
 	raw, err := os.ReadFile(filepath.Join(tasks, "TASK-1", "taskflow.yaml"))
 	if err != nil || strings.Contains(string(raw), "openspec") {
 		t.Fatalf("generated configuration contains OpenSpec: %s (%v)", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "TASK-1", ".taskflow", "inventory.json")); !os.IsNotExist(err) {
+		t.Fatalf("initialization created inventory: %v", err)
+	}
+	if state := loadAppState(t, tasks, "TASK-1"); state.SchemaVersion != domain.StateSchemaVersion {
+		t.Fatalf("state schema=%d", state.SchemaVersion)
 	}
 	task, err := s.Load(tasks, "TASK-1")
 	if err != nil {
@@ -80,9 +87,20 @@ func TestLoadStartStateCompatibility(t *testing.T) {
 	}
 
 	legacy := write(domain.State{SchemaVersion: 1, TaskID: "TASK", Phase: "initialized"})
-	state, exists, err := loadStartState(task)
-	if err != nil || !exists || state.ConfigDigest != "" {
-		t.Fatalf("legacy state: exists=%v err=%v state=%#v", exists, err, state)
+	if _, exists, err := loadStartState(task); err == nil || !exists {
+		t.Fatalf("expected legacy state rejection: exists=%v err=%v", exists, err)
+	}
+	if result, code := (Service{}).Start(context.Background(), task, StartOptions{Execute: true}); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "STATE_INCOMPATIBLE") {
+		t.Fatalf("legacy start: code=%d result=%#v", code, result)
+	}
+	if got, err := os.ReadFile(filepath.Join(stateDir, "state.json")); err != nil || !bytes.Equal(got, legacy) {
+		t.Fatalf("legacy state changed: %q %v", got, err)
+	}
+	if result, code := (Service{}).Validate(context.Background(), task); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "STATE_INCOMPATIBLE") {
+		t.Fatalf("legacy validate: code=%d result=%#v", code, result)
+	}
+	if _, err := os.Stat(validationReportPath(task)); !os.IsNotExist(err) {
+		t.Fatalf("legacy validation wrote report: %v", err)
 	}
 	corrupt := []byte("not-json")
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), corrupt, 0644); err != nil {
@@ -94,7 +112,11 @@ func TestLoadStartStateCompatibility(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(stateDir, "state.json")); err != nil || string(got) != string(corrupt) {
 		t.Fatalf("corrupt state changed: %q %v", got, err)
 	}
-	wrong := write(domain.State{SchemaVersion: 2, TaskID: "TASK"})
+	current := write(domain.State{SchemaVersion: domain.StateSchemaVersion, TaskID: "TASK"})
+	if _, exists, err := loadStartState(task); err != nil || !exists {
+		t.Fatalf("current state rejected: exists=%v err=%v", exists, err)
+	}
+	wrong := write(domain.State{SchemaVersion: domain.StateSchemaVersion + 1, TaskID: "TASK"})
 	if _, _, err := loadStartState(task); err == nil {
 		t.Fatal("expected incompatible schema error")
 	}
@@ -102,6 +124,7 @@ func TestLoadStartStateCompatibility(t *testing.T) {
 		t.Fatalf("incompatible state changed: %q %v", got, err)
 	}
 	_ = legacy
+	_ = current
 }
 
 func hasDiagnostic(diagnostics []report.Diagnostic, code string) bool {
@@ -125,7 +148,7 @@ func TestPathAndRemoteHelpers(t *testing.T) {
 func TestValidationReportRoundTripAndCompatibility(t *testing.T) {
 	root := t.TempDir()
 	task := domain.Task{Task: domain.TaskInfo{ID: "TASK", Root: root}}
-	reportValue := domain.ValidationReport{SchemaVersion: 1, TaskID: "TASK", Repositories: map[string]domain.RepositoryValidation{}}
+	reportValue := domain.ValidationReport{SchemaVersion: domain.ValidationSchemaVersion, TaskID: "TASK", Repositories: map[string]domain.RepositoryValidation{}}
 	if err := persistValidationReport(task, reportValue); err != nil {
 		t.Fatal(err)
 	}
@@ -139,44 +162,104 @@ func TestValidationReportRoundTripAndCompatibility(t *testing.T) {
 	if _, err := loadValidationReport(task); err == nil {
 		t.Fatal("expected invalid report error")
 	}
-	if err := persistValidationReport(task, domain.ValidationReport{SchemaVersion: 2, TaskID: "TASK", Repositories: map[string]domain.RepositoryValidation{}}); err != nil {
+	if err := persistValidationReport(task, domain.ValidationReport{SchemaVersion: 1, TaskID: "TASK", Repositories: map[string]domain.RepositoryValidation{}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadValidationReport(task); err == nil {
 		t.Fatal("expected incompatible report error")
 	}
+	status, _ := (Service{Git: git.Client{Runner: execx.OSRunner{}}}).Status(context.Background(), task)
+	if status.Data.(domain.StatusData).LastValidation != nil {
+		t.Fatal("status exposed incompatible validation report")
+	}
 }
 
 type openRunner struct {
-	err error
+	err         error
+	lookPathErr error
+	calls       int
+	spec        execx.CommandSpec
 }
 
-func (r openRunner) Run(context.Context, execx.CommandSpec) (execx.Result, error) {
+func (r *openRunner) Run(_ context.Context, spec execx.CommandSpec) (execx.Result, error) {
+	r.calls++
+	r.spec = spec
 	if r.err != nil {
 		return execx.Result{ExitCode: 7}, r.err
 	}
 	return execx.Result{}, nil
 }
 
-func (openRunner) LookPath(string) (string, error) { return "", nil }
+func (r *openRunner) LookPath(name string) (string, error) {
+	if r.lookPathErr != nil {
+		return "", r.lookPathErr
+	}
+	return filepath.Join("/tools", name), nil
+}
 
 func TestOpenReportsToolSuccessAndFailure(t *testing.T) {
-	task := domain.Task{
-		Task:         domain.TaskInfo{ID: "TASK", Root: t.TempDir()},
-		Primary:      "repo",
-		Repositories: []domain.Repository{{Name: "repo", Worktree: "worktrees/repo"}},
-		Development:  domain.Development{DefaultTool: "codex", Tools: map[string]domain.ToolDef{"codex": {Executable: "codex"}}},
+	repo := makeGitRepo(t)
+	repo2 := makeGitRepo(t)
+	tasks := t.TempDir()
+	service := New()
+	if _, code := service.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK", Repositories: []string{"repo=" + repo, "repo2=" + repo2}}); code != report.ExitOK {
+		t.Fatal(code)
 	}
-	service := Service{Runner: openRunner{}}
+	task, err := service.Load(tasks, "TASK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &openRunner{}
+	service.Runner = runner
+	if result, code := service.Open(context.Background(), task, "", nil, nil, nil, nil); code != report.ExitConfig || result.OK || !hasDiagnostic(result.Errors, "WORKSPACE_NOT_STARTED") || runner.calls != 0 {
+		t.Fatalf("unstarted: code=%d calls=%d result=%#v", code, runner.calls, result)
+	}
+	service.Runner = execx.OSRunner{}
+	if _, code := service.Start(context.Background(), task, StartOptions{Execute: true}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	dirtyPath := filepath.Join(tasks, "TASK", task.Repositories[0].Worktree, "dirty.txt")
+	if err := os.WriteFile(dirtyPath, []byte("dirty"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runner = &openRunner{}
+	service.Runner = runner
 	if result, code := service.Open(context.Background(), task, "", nil, nil, nil, nil); code != report.ExitOK || !result.OK {
 		t.Fatalf("success: code=%d result=%#v", code, result)
 	}
-	service.Runner = openRunner{err: os.ErrClosed}
+	wantDir := filepath.Join(task.Task.Root, task.Repositories[0].Worktree)
+	secondary := filepath.Join(task.Task.Root, task.Repositories[1].Worktree)
+	if runner.spec.Dir != wantDir || runner.spec.Executable != filepath.Join("/tools", "codex") || !strings.Contains(strings.Join(runner.spec.Args, " "), secondary) {
+		t.Fatalf("launch spec: %#v", runner.spec)
+	}
+	runner = &openRunner{lookPathErr: os.ErrNotExist}
+	service.Runner = runner
+	if result, code := service.Open(context.Background(), task, "codex", nil, nil, nil, nil); code != report.ExitEnvironment || result.OK || !hasDiagnostic(result.Errors, "TOOL_NOT_FOUND") || runner.calls != 0 {
+		t.Fatalf("missing tool: code=%d calls=%d result=%#v", code, runner.calls, result)
+	}
+	runner = &openRunner{err: os.ErrClosed}
+	service.Runner = runner
 	if result, code := service.Open(context.Background(), task, "codex", nil, nil, nil, nil); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "TOOL_EXITED") {
 		t.Fatalf("failure: code=%d result=%#v", code, result)
 	}
 	if result, code := service.Open(context.Background(), task, "unknown", nil, nil, nil, nil); code != report.ExitConfig || result.OK {
 		t.Fatalf("invalid tool: code=%d result=%#v", code, result)
+	}
+	service.Runner = execx.OSRunner{}
+	if out, err := exec.Command("git", "-C", secondary, "checkout", "-b", "unexpected").CombinedOutput(); err != nil {
+		t.Fatalf("change branch: %v: %s", err, out)
+	}
+	service.Runner = &openRunner{}
+	if result, code := service.Open(context.Background(), task, "codex", nil, nil, nil, nil); code != report.ExitConflict || result.OK || !hasDiagnostic(result.Errors, "WORKTREE_MISMATCH") {
+		t.Fatalf("mismatched worktree: code=%d result=%#v", code, result)
+	}
+	service.Runner = execx.OSRunner{}
+	if out, err := exec.Command("git", "-C", repo2, "worktree", "remove", "--force", secondary).CombinedOutput(); err != nil {
+		t.Fatalf("remove worktree: %v: %s", err, out)
+	}
+	service.Runner = &openRunner{}
+	if result, code := service.Open(context.Background(), task, "codex", nil, nil, nil, nil); code != report.ExitConflict || result.OK || !hasDiagnostic(result.Errors, "WORKTREE_INVALID") {
+		t.Fatalf("missing worktree: code=%d result=%#v", code, result)
 	}
 }
 
@@ -188,7 +271,7 @@ func TestRepoAddRollsBackOnWriteFailure(t *testing.T) {
 	repo2 := makeGitRepo(t)
 	tasks := t.TempDir()
 	s := New()
-	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-R", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
+	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-R", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
 		t.Fatal(code)
 	}
 	task, err := s.Load(tasks, "TASK-R")
@@ -198,7 +281,10 @@ func TestRepoAddRollsBackOnWriteFailure(t *testing.T) {
 	taskRoot := filepath.Join(tasks, "TASK-R")
 	stateDir := filepath.Join(taskRoot, ".taskflow")
 	beforeConfig, _ := os.ReadFile(filepath.Join(taskRoot, "taskflow.yaml"))
-	beforeInventory, _ := os.ReadFile(filepath.Join(stateDir, "inventory.json"))
+	legacyInventory := []byte("legacy inventory\n")
+	if err := os.WriteFile(filepath.Join(stateDir, "inventory.json"), legacyInventory, 0644); err != nil {
+		t.Fatal(err)
+	}
 	beforeState, _ := os.ReadFile(filepath.Join(stateDir, "state.json"))
 	if err := os.Chmod(stateDir, 0500); err != nil {
 		t.Fatal(err)
@@ -212,7 +298,7 @@ func TestRepoAddRollsBackOnWriteFailure(t *testing.T) {
 	if after, _ := os.ReadFile(filepath.Join(taskRoot, "taskflow.yaml")); !bytes.Equal(beforeConfig, after) {
 		t.Fatal("configuration was not rolled back")
 	}
-	if after, _ := os.ReadFile(filepath.Join(stateDir, "inventory.json")); !bytes.Equal(beforeInventory, after) {
+	if after, _ := os.ReadFile(filepath.Join(stateDir, "inventory.json")); !bytes.Equal(legacyInventory, after) {
 		t.Fatal("inventory was changed")
 	}
 	if after, _ := os.ReadFile(filepath.Join(stateDir, "state.json")); !bytes.Equal(beforeState, after) {
@@ -253,11 +339,16 @@ func TestRepoAddAppendsAcrossPhasesAndPreservesOutcomes(t *testing.T) {
 			repo2 := makeGitRepo(t)
 			tasks := t.TempDir()
 			s := New()
-			if result, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-9", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK || !result.OK {
+			if result, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-9", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK || !result.OK {
 				t.Fatalf("init: %d %#v", code, result)
 			}
 			task, err := s.Load(tasks, "TASK-9")
 			if err != nil {
+				t.Fatal(err)
+			}
+			legacyInventoryPath := filepath.Join(tasks, "TASK-9", ".taskflow", "inventory.json")
+			legacyInventory := []byte("legacy inventory must remain untouched\n")
+			if err := os.WriteFile(legacyInventoryPath, legacyInventory, 0644); err != nil {
 				t.Fatal(err)
 			}
 			if phase == "started" || phase == "failed" {
@@ -279,6 +370,9 @@ func TestRepoAddAppendsAcrossPhasesAndPreservesOutcomes(t *testing.T) {
 			result, code := s.RepoAdd(context.Background(), task, RepoAddOptions{Repository: "repo2=" + repo2, DependsOn: []string{"repo1"}})
 			if code != report.ExitOK || !result.OK {
 				t.Fatalf("repo add: %d %#v", code, result)
+			}
+			if after, err := os.ReadFile(legacyInventoryPath); err != nil || !bytes.Equal(after, legacyInventory) {
+				t.Fatalf("legacy inventory changed: %q %v", after, err)
 			}
 			merged, err := s.Load(tasks, "TASK-9")
 			if err != nil {
@@ -318,7 +412,7 @@ func TestRepoAddDryRunDoesNotWrite(t *testing.T) {
 	repo2 := makeGitRepo(t)
 	tasks := t.TempDir()
 	s := New()
-	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-D", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
+	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-D", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
 		t.Fatal(code)
 	}
 	task, err := s.Load(tasks, "TASK-D")
@@ -350,7 +444,7 @@ func TestRepoAddValidationErrors(t *testing.T) {
 	notGit := t.TempDir()
 	tasks := t.TempDir()
 	s := New()
-	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-E", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
+	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-E", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
 		t.Fatal(code)
 	}
 	task, err := s.Load(tasks, "TASK-E")
@@ -387,7 +481,7 @@ func TestStatusReportsStaleValidationAfterAppend(t *testing.T) {
 	repo2 := makeGitRepo(t)
 	tasks := t.TempDir()
 	s := New()
-	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-S", Primary: "repo1", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
+	if _, code := s.Init(context.Background(), InitOptions{TasksRoot: tasks, TaskID: "TASK-S", Repositories: []string{"repo1=" + repo1}}); code != report.ExitOK {
 		t.Fatal(code)
 	}
 	task, err := s.Load(tasks, "TASK-S")
@@ -401,7 +495,7 @@ func TestStatusReportsStaleValidationAfterAppend(t *testing.T) {
 		t.Fatal(code)
 	}
 	fresh, _ := s.Status(context.Background(), task)
-	if freshData := fresh.Data.(domain.StatusData); freshData.ValidationStale || freshData.LastValidation == nil {
+	if freshData := fresh.Data.(domain.StatusData); freshData.ValidationConfigStale || freshData.LastValidation == nil {
 		t.Fatalf("expected fresh validation, got %#v", freshData)
 	}
 	task, err = s.Load(tasks, "TASK-S")
@@ -417,13 +511,8 @@ func TestStatusReportsStaleValidationAfterAppend(t *testing.T) {
 	}
 	stale, _ := s.Status(context.Background(), task)
 	staleData := stale.Data.(domain.StatusData)
-	if !staleData.ValidationStale || staleData.LastValidation != nil {
+	if !staleData.ValidationConfigStale || staleData.LastValidation == nil {
 		t.Fatalf("expected stale validation, got %#v", staleData)
-	}
-	for _, repo := range staleData.Repositories {
-		if repo.LastValidationOK != nil {
-			t.Fatalf("stale report projected onto repository %s", repo.Name)
-		}
 	}
 	if _, code := s.Start(context.Background(), task, StartOptions{Execute: true}); code != report.ExitOK {
 		t.Fatal(code)
@@ -432,7 +521,7 @@ func TestStatusReportsStaleValidationAfterAppend(t *testing.T) {
 		t.Fatal(code)
 	}
 	refreshed, _ := s.Status(context.Background(), task)
-	if refreshedData := refreshed.Data.(domain.StatusData); refreshedData.ValidationStale {
+	if refreshedData := refreshed.Data.(domain.StatusData); refreshedData.ValidationConfigStale {
 		t.Fatalf("expected refreshed validation, got %#v", refreshedData)
 	}
 }

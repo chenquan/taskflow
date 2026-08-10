@@ -21,33 +21,22 @@ func (a AdapterImpl) Build(t domain.Task, extraArgs []string) (LaunchSpec, error
 	if a.Tool != "codex" && a.Tool != "claude" {
 		return LaunchSpec{}, fmt.Errorf("unsupported tool %s", a.Tool)
 	}
-	definition, ok := t.Development.Tools[a.Tool]
-	if !ok || strings.TrimSpace(definition.Executable) == "" {
-		return LaunchSpec{}, fmt.Errorf("tool %s has no configured executable", a.Tool)
+	if len(t.Repositories) == 0 {
+		return LaunchSpec{}, fmt.Errorf("task has no repositories")
 	}
-	var primary string
-	for _, r := range t.Repositories {
-		if r.Name == t.Primary {
-			primary = filepath.Join(t.Task.Root, r.Worktree)
-		}
-	}
-	if primary == "" {
-		return LaunchSpec{}, fmt.Errorf("primary repository is not configured")
-	}
-	spec := LaunchSpec{Executable: definition.Executable, Dir: primary}
-	for _, r := range t.Repositories {
+	primary := filepath.Join(t.Task.Root, t.Repositories[0].Worktree)
+	spec := LaunchSpec{Executable: a.Tool, Dir: primary}
+	for _, r := range t.Repositories[1:] {
 		p := filepath.Join(t.Task.Root, r.Worktree)
-		if p != primary {
-			spec.Args = append(spec.Args, "--add-dir", p)
-		}
+		spec.Args = append(spec.Args, "--add-dir", p)
 	}
 	spec.Args = append(spec.Args, "--add-dir", t.Task.Root)
 	spec.Args = append(spec.Args, extraArgs...)
-	if a.Tool == "claude" && definition.LoadAdditionalInstructions {
+	if a.Tool == "claude" {
 		spec.Env = []string{"CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"}
 	}
 	for _, arg := range spec.Args {
-		if arg == "--worktree" {
+		if arg == "--worktree" || strings.HasPrefix(arg, "--worktree=") {
 			return LaunchSpec{}, fmt.Errorf("unsafe launch argument")
 		}
 	}

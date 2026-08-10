@@ -1,51 +1,29 @@
 # Taskflow
 
-Taskflow 是一个面向 AI 编程的多 Git 仓库开发工作区编排 CLI。它为 Codex、Claude Code 等 AI 编程工具准备隔离的 worktree，管理跨仓库任务上下文，执行安全检查和项目验证，让 AI 可以在受控工作区内完成真实代码修改。
+Taskflow 是一个面向 AI 编程的多 Git 仓库 worktree 安全协调 CLI。它根据声明式配置预检并创建隔离 worktree、恢复半失败操作、聚合 Git 状态和项目验证，并把准备好的多个仓库一次性交给 Codex 或 Claude Code。
 
-Taskflow 不会自动提交代码、推送分支、创建 PR、合并分支或删除 worktree；这些高风险操作由用户根据各仓库流程手动完成。
+Taskflow 不管理需求、AI 会话、提交、推送、PR、合并、发布或 worktree 清理。这些操作继续由用户和各仓库自己的流程负责。
 
-## 特性
+## 核心能力
 
-- 一个任务关联多个本地 Git 仓库
-- 支持向已初始化或已启动的任务 append-only 追加仓库
+- 一个任务按稳定顺序关联多个本地 Git 仓库
 - 使用 Git worktree 隔离任务开发环境
-- 支持仓库依赖关系和拓扑执行顺序
-- 面向 Codex、Claude Code 等 AI 编程工具提供统一工作区
-- 为 AI 编程提供跨仓库上下文、依赖顺序和额外目录访问
-- 支持 dry-run、任务锁、源分支锁和幂等执行
-- 支持验证命令、超时控制和验证报告
-- 支持文本和 JSON 输出
-- 不直接管理 OpenSpec 或其他业务规格系统
-
-## 环境要求
-
-- Go 1.25 或更高版本
-- Git
-- 可选：Codex CLI 或 Claude Code
-
-## 安装操作 Skill
-
-Taskflow 内置了用于指导 AI 编程代理操作任务工作区的 `taskflow` skill。安装到当前用户的 Codex 与 Claude Code：
-
-```bash
-taskflow skill install
-```
-
-安装到当前项目（`./.codex/skills` 与 `./.claude/skills`）：
-
-```bash
-taskflow skill install --project
-```
-
-默认不会覆盖同名 skill；确认需要替换时加 `--force`。
+- 支持依赖拓扑顺序和 scoped validation
+- 支持 append-only 追加仓库
+- 支持 dry-run、任务锁、源分支锁、幂等执行和半失败恢复
+- 一条 `open` 命令将所有仓库关联到 Codex 或 Claude
+- 提供原始 Git 状态、历史验证报告、文本和 JSON 输出
+- 不依赖 OpenSpec 或其他业务规格系统运行
 
 ## 安装
+
+环境要求：Go 1.25 或更高版本、Git，以及可选的 `codex` 或 `claude` 可执行文件。
 
 ```bash
 go install github.com/chenquan/taskflow@latest
 ```
 
-或从源码构建：
+也可以从源码构建：
 
 ```bash
 git clone https://github.com/chenquan/taskflow.git
@@ -55,56 +33,43 @@ go build -o taskflow .
 
 ## 快速开始
 
-`--tasks-root` 是全局参数；省略时默认使用当前执行目录（`cwd`），显式传入时以传入路径为准。
-
-创建任务：
+`--tasks-root` 默认是当前目录。仓库声明顺序必须稳定：第一个仓库是 `open` 的工作目录，后续仓库作为 additional directories。
 
 ```bash
 taskflow --tasks-root ~/tasks init REFUND-123 \
-  --primary order-service \
   --repo order-service=~/projects/order-service \
   --repo payment-sdk=~/projects/payment-sdk
-```
 
-预览并创建开发环境：
-
-```bash
 taskflow --tasks-root ~/tasks start REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks start REFUND-123 --execute
-```
-
-启动 AI 编程工具、查看状态并执行验证：
-
-```bash
-taskflow --tasks-root ~/tasks open REFUND-123 --tool codex
-taskflow --tasks-root ~/tasks status REFUND-123
+taskflow --tasks-root ~/tasks open REFUND-123
 taskflow --tasks-root ~/tasks validate REFUND-123
+taskflow --tasks-root ~/tasks status REFUND-123
 ```
 
-`open` 支持用 `--` 透传额外参数给工具（权限绕过、嵌套 worktree 类参数仍被拒绝）：
+`open` 默认启动从 `PATH` 解析的 Codex；也可以显式启动 Claude，并使用 `--` 透传工具参数：
 
 ```bash
+taskflow --tasks-root ~/tasks open REFUND-123 --tool claude
 taskflow --tasks-root ~/tasks open REFUND-123 --tool codex -- --model gpt-5
 ```
 
+Taskflow 原样透传显式工具参数，但拒绝 `--worktree` 和 `--worktree=...`，避免工具创建嵌套 worktree。`open` 只在状态为 `started` 且所有配置 worktree 的源仓库和分支都匹配时启动；dirty worktree 不会被拒绝。
+
 ## 追加仓库
 
-任务初始化或启动后，如果发现还需要补充仓库，使用 append-only 的 `repo add`。它只追加任务元数据并推进配置 digest，不创建 worktree，也不会修改、删除已有仓库或更改主仓库。
+任务初始化或启动后，可以 append-only 添加仓库：
 
 ```bash
 taskflow --tasks-root ~/tasks repo add REFUND-123 \
   --repo inventory-service=~/projects/inventory-service \
   --depends-on order-service
-```
 
-追加后先用 dry-run 预览，再显式执行以创建新增仓库的 worktree（`start` 只为新增仓库创建 worktree，复用已有 worktree）：
-
-```bash
 taskflow --tasks-root ~/tasks start REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks start REFUND-123 --execute
 ```
 
-`repo add` 仅在任务处于 `initialized`、`started` 或 `failed` 阶段时允许，复用 `init` 的默认值（`base: HEAD`、`branch: feature/<task-id>`、`worktree: worktrees/<name>`、无 checks、默认无依赖）。追加会使既有验证报告失效，`status` 会返回 `validationStale: true`；运行 `start --execute` 建好新增 worktree 后，下一次 `validate` 会按新配置重新生成报告。
+`repo add` 只更新 `taskflow.yaml` 和 `.taskflow/state.json`，不会创建 worktree、修改现有仓库或改变第一个仓库。`depends_on` 只描述 start/validate 的执行顺序；它不表示仓库所有权、接口契约或交付 readiness。追加后 `status.validationConfigStale` 会保持为 `true`，直到新的 `validate` 写入当前配置摘要的报告。
 
 ## 任务目录
 
@@ -112,7 +77,6 @@ taskflow --tasks-root ~/tasks start REFUND-123 --execute
 ~/tasks/REFUND-123/
 ├── taskflow.yaml
 ├── .taskflow/
-│   ├── inventory.json
 │   ├── state.json
 │   └── reports/
 └── worktrees/
@@ -120,7 +84,7 @@ taskflow --tasks-root ~/tasks start REFUND-123 --execute
     └── payment-sdk/
 ```
 
-`init` 只创建配置和状态文件；`start --execute` 才会创建任务分支和 worktree。
+`taskflow.yaml` 是用户声明的期望状态，`state.json` 只记录 Taskflow 的执行状态，validation report 是历史验证事实。Taskflow 不再创建或读取 `inventory.json`；遗留文件会原样保留。
 
 ## 配置示例
 
@@ -153,40 +117,49 @@ repositories:
         args: [test, ./...]
         timeout: 10m
 
-development:
-  default_tool: codex
-  tools:
-    codex:
-      executable: codex
-    claude:
-      executable: claude
-      load_additional_instructions: true
-
 execution:
   fetch: true
 ```
 
-任务根目录由 `--tasks-root` 和任务 ID 推导；第一个仓库默认作为主仓库。`source` 使用绝对路径；`worktree` 是相对于任务根目录的路径。修改配置后，建议运行 `start --dry-run` 检查执行计划。
+`source` 使用绝对路径，`worktree` 必须位于任务的 `worktrees/` 目录内。修改已启动任务的仓库集合只能使用 `repo add`；其他配置漂移会被 state digest 拒绝。
 
-## JSON 输出
+## 状态和验证
 
 ```bash
 taskflow --json --tasks-root ~/tasks status REFUND-123
+taskflow --tasks-root ~/tasks validate REFUND-123
+taskflow --tasks-root ~/tasks validate REFUND-123 --repo payment-sdk
 ```
 
-失败命令会返回非零退出码，并在 JSON 中提供错误代码。
+`status` 只报告可观察事实：phase、worktree、branch、HEAD、dirty、upstream、ahead、behind、检查错误，以及历史 `lastValidation`。它不推断 pushed、依赖 readiness 或任务完成。`validationConfigStale` 只表示历史报告的配置摘要是否匹配当前配置。
 
-## 开发和测试
+## 破坏性兼容边界
+
+本版本不接受旧 `development` 配置或 schema-v1 state。CLI 会返回 `LEGACY_CONFIGURATION_UNSUPPORTED` 或 `STATE_INCOMPATIBLE`，且不会修改旧任务目录、state、inventory 或 worktree。请在空任务目录或新的 tasks root 重新初始化；旧目录由用户自行保留或清理。
+
+## 安装操作 Skill
+
+```bash
+taskflow skill install
+taskflow skill install --project
+```
+
+默认不覆盖同名 Skill；确认替换时使用 `--force`。
+
+## 非目标
+
+- 需求、规格、角色、契约负责人或项目进度管理
+- AI session lease、对话恢复、模型或权限策略
+- commit、push、PR、merge、release
+- 自动删除、archive 或清理 worktree
+- 后台 daemon、远程任务服务或 Web UI
+
+## 开发和验证
 
 ```bash
 go test ./...
 go vet ./...
 go test -race ./...
-```
-
-端到端测试：
-
-```bash
 go test ./cmd -run 'TestE2E' -count=1
 ```
 
