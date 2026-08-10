@@ -84,7 +84,7 @@ taskflow --tasks-root ~/tasks start REFUND-123 --execute
     └── payment-sdk/
 ```
 
-`taskflow.yaml` 是用户声明的期望状态，`state.json` 只记录 Taskflow 的执行状态，validation report 是历史验证事实。Taskflow 不再创建或读取 `inventory.json`；遗留文件会原样保留。
+`taskflow.yaml` 是用户声明的期望状态，`state.json` 只记录 Taskflow 的执行状态，validation report 是历史验证事实。Taskflow 不再创建或读取 `inventory.json`。
 
 ## 配置示例
 
@@ -135,7 +135,7 @@ taskflow --tasks-root ~/tasks validate REFUND-123 --repo payment-sdk
 
 ## 破坏性兼容边界
 
-本版本不接受旧 `development` 配置或 schema-v1 state。CLI 会返回 `LEGACY_CONFIGURATION_UNSUPPORTED` 或 `STATE_INCOMPATIBLE`，且不会修改旧任务目录、state、inventory 或 worktree。请在空任务目录或新的 tasks root 重新初始化；旧目录由用户自行保留或清理。
+这是一个允许破坏性升级的版本：仅支持当前配置和 schema，旧 `development` 配置、旧 state/report 以及旧字段不会被迁移或兼容。需要使用新版本时，请重新初始化任务目录。
 
 ## 安装操作 Skill
 

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"github.com/chenquan/taskflow/internal/domain"
 	"os"
 	"os/exec"
@@ -14,7 +13,7 @@ func task(root string) domain.Task {
 	return domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: "A", Root: root}, Repositories: []domain.Repository{{Name: "one", Source: root}}}
 }
 
-func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T) {
+func TestLoadRejectsRemovedAndUnknownFields(t *testing.T) {
 	d := t.TempDir()
 	if out, err := exec.Command("git", "init", d).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
@@ -25,19 +24,14 @@ func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "taskflow.yaml")
-	legacy := strings.Replace(string(raw), "execution: {}", "execution:\n    create_openspec_change: true", 1)
-	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
+	removed := string(raw) + "\ncreate_openspec_change: true\n"
+	if err := os.WriteFile(path, []byte(removed), 0644); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("expected legacy configuration compatibility, got %v", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "create_openspec_change") {
+		t.Fatalf("expected removed field rejection, got %v", err)
 	}
-	normalized, err := Marshal(loaded)
-	if err != nil || strings.Contains(string(normalized), "create_openspec_change") {
-		t.Fatalf("legacy field survived normalized output: %s (%v)", normalized, err)
-	}
-	stale := legacy + "\nunknown_field: true\n"
+	stale := string(raw) + "\nunknown_field: true\n"
 	if err := os.WriteFile(path, []byte(stale), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -46,20 +40,15 @@ func TestLoadAcceptsLegacyOpenSpecFieldAndRejectsOtherUnknownFields(t *testing.T
 	}
 }
 
-func TestLoadRejectsLegacyDevelopmentConfiguration(t *testing.T) {
+func TestLoadRejectsRemovedDevelopmentConfiguration(t *testing.T) {
 	d := t.TempDir()
 	path := filepath.Join(d, "taskflow.yaml")
 	raw := "task:\n  id: A\nrepositories:\n  - name: one\n    source: " + d + "\ndevelopment:\n  default_tool: codex\n"
 	if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := os.ReadFile(path)
-	if _, err := Load(path); !errors.Is(err, ErrLegacyConfiguration) {
-		t.Fatalf("expected legacy configuration error, got %v", err)
-	}
-	after, _ := os.ReadFile(path)
-	if string(after) != string(before) {
-		t.Fatal("legacy configuration was modified")
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "development") {
+		t.Fatalf("expected removed configuration rejection, got %v", err)
 	}
 }
 func TestValidateDefaults(t *testing.T) {

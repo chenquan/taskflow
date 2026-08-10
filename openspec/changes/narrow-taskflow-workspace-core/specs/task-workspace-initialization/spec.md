@@ -16,7 +16,7 @@ The CLI SHALL provide `taskflow init <task-id>` with an explicit tasks root and 
 - **THEN** the CLI returns a configuration error and does not create a partial task workspace
 
 ### Requirement: Initialization is idempotent and non-overwriting
-The CLI MUST treat a pre-existing schema-v2 workspace with equivalent normalized configuration as successful without rewriting user-authored files. It MUST reject a conflicting configuration, a legacy workspace, or unmanaged existing files rather than overwriting them.
+The CLI MUST treat a pre-existing schema-v2 workspace with equivalent normalized configuration as successful without rewriting user-authored files. It MUST reject a conflicting configuration, an incompatible workspace, or unmanaged existing files rather than overwriting them.
 
 #### Scenario: Repeat equivalent initialization
 - **WHEN** a user repeats `init` with the same normalized task and repository inputs

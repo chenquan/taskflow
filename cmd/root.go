@@ -2,13 +2,11 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/chenquan/taskflow/internal/app"
-	"github.com/chenquan/taskflow/internal/config"
 	"github.com/chenquan/taskflow/internal/report"
 	"github.com/chenquan/taskflow/skills"
 	"github.com/spf13/cobra"
@@ -152,11 +150,7 @@ func NewRootCommand() *cobra.Command {
 }
 
 func loadDiagnostic(err error) report.Diagnostic {
-	code := "INVALID_CONFIGURATION"
-	if errors.Is(err, config.ErrLegacyConfiguration) {
-		code = "LEGACY_CONFIGURATION_UNSUPPORTED"
-	}
-	return report.Diagnostic{Code: code, Message: err.Error()}
+	return report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}
 }
 
 func skillTargets(project bool) ([]skills.Target, error) {

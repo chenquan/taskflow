@@ -20,7 +20,7 @@ The CLI SHALL provide `taskflow repo add <task-id> --repo <name>=<absolute-path>
 - **THEN** `repo add` returns an environment error and leaves every task file unchanged
 
 ### Requirement: Migrate configuration digest atomically
-A successful `repo add` MUST update `taskflow.yaml` and `.taskflow/state.json` as one atomic migration. The migration MUST preserve existing repository action outcomes and worktree references, MUST add a pending fetch (or skipped fetch when `execution.fetch` is false) and pending worktree action for the appended repository, and MUST advance the persisted configuration digest to the normalized appended configuration. If either write fails, the command MUST restore both files and return an execution error, leaving existing task state, worktrees, and any legacy inventory file unchanged.
+A successful `repo add` MUST update `taskflow.yaml` and `.taskflow/state.json` atomically. The update MUST preserve existing repository action outcomes and worktree references, MUST add a pending fetch (or skipped fetch when `execution.fetch` is false) and pending worktree action for the appended repository, and MUST advance the persisted configuration digest to the normalized appended configuration. If either write fails, the command MUST restore both files and return an execution error.
 
 #### Scenario: Preserve completed work while adding pending state
 - **WHEN** a started task with a completed worktree for its first repository appends a second repository
@@ -29,7 +29,3 @@ A successful `repo add` MUST update `taskflow.yaml` and `.taskflow/state.json` a
 #### Scenario: Roll back on write failure
 - **WHEN** writing either task file fails after the other has succeeded
 - **THEN** `repo add` restores both files and returns an execution error
-
-#### Scenario: Preserve a legacy inventory file
-- **WHEN** a schema-v2 workspace contains an unrelated legacy `.taskflow/inventory.json`
-- **THEN** `repo add` neither reads, updates, nor removes that file

@@ -53,7 +53,7 @@ func TestSkillScope(t *testing.T) {
 	}
 }
 
-func TestCommandsReportLegacyConfigurationWithoutMutation(t *testing.T) {
+func TestCommandsReportRemovedConfiguration(t *testing.T) {
 	tasks := t.TempDir()
 	rootPath := filepath.Join(tasks, "LEGACY")
 	if err := os.MkdirAll(rootPath, 0755); err != nil {
@@ -70,11 +70,7 @@ func TestCommandsReportLegacyConfigurationWithoutMutation(t *testing.T) {
 	root.SetOut(&out)
 	root.SetArgs([]string{"--json", "--tasks-root", tasks, "status", "LEGACY"})
 	err := root.Execute()
-	if exit, ok := err.(*exitError); !ok || exit.code != 2 || !strings.Contains(out.String(), "LEGACY_CONFIGURATION_UNSUPPORTED") {
+	if exit, ok := err.(*exitError); !ok || exit.code != 2 || !strings.Contains(out.String(), "INVALID_CONFIGURATION") {
 		t.Fatalf("err=%v output=%s", err, out.String())
-	}
-	after, _ := os.ReadFile(path)
-	if !bytes.Equal(raw, after) {
-		t.Fatal("legacy configuration changed")
 	}
 }

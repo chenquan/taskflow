@@ -1,8 +1,8 @@
 ## 1. Narrow configuration and persistence
 
-- [x] 1.1 Remove task-level development/tool definitions and `--primary`, preserve repository order, and add explicit legacy-configuration diagnostics.
-- [x] 1.2 Advance task state and validation report schemas to version 2 and reject legacy state without mutation.
-- [x] 1.3 Remove inventory models, initialization writes, repository-append reads/writes, and preserve unrelated legacy inventory files.
+- [x] 1.1 Remove task-level development/tool definitions and `--primary`, preserve repository order, and rely on strict current-schema decoding.
+- [x] 1.2 Advance task state and validation report schemas to version 2 and require the current state contract.
+- [x] 1.3 Remove inventory models and all initialization/repository-append reads and writes.
 
 ## 2. Harden built-in tool launch
 
@@ -13,12 +13,12 @@
 ## 3. Report only observable status
 
 - [x] 3.1 Remove publication, dependency-readiness, and per-repository validation booleans from status models and rendering.
-- [x] 3.2 Rename configuration staleness to `validationConfigStale`, retain compatible reports as historical data, and ignore incompatible reports without mutation.
+- [x] 3.2 Rename configuration staleness to `validationConfigStale`; only current-schema reports participate in status.
 - [x] 3.3 Update status, append, and validation tests for the breaking JSON and schema-v2 contracts.
 
 ## 4. Align guidance and specifications
 
-- [x] 4.1 Rewrite README configuration, lifecycle, compatibility, and non-goal guidance for the narrowed workspace core.
+- [x] 4.1 Rewrite README configuration, lifecycle, breaking-release, and non-goal guidance for the narrowed workspace core.
 - [x] 4.2 Update the bundled Taskflow skill to remove inventory, primary-selection, ownership, contract, and unsupported policy instructions.
 - [x] 4.3 Run strict OpenSpec validation and resolve every delta-spec consistency issue.
 

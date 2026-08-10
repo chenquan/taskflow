@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,7 +16,6 @@ import (
 )
 
 var repoName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-var ErrLegacyConfiguration = errors.New("legacy task configuration is unsupported")
 
 func ValidateTaskID(taskID string) error {
 	if taskID == "" || taskID == "." || taskID == ".." || filepath.IsAbs(taskID) || filepath.Base(taskID) != taskID || strings.ContainsAny(taskID, `/\\`) {
@@ -31,13 +29,6 @@ func Load(path string) (domain.Task, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return domain.Task{}, err
-	}
-	b, err = stripLegacyOpenSpecField(b)
-	if err != nil {
-		return domain.Task{}, fmt.Errorf("decode %s: %w", path, err)
-	}
-	if hasTopLevelField(b, "development") {
-		return domain.Task{}, fmt.Errorf("%w: remove development configuration and reinitialize the task in an empty directory", ErrLegacyConfiguration)
 	}
 	var t domain.Task
 	d := yaml.NewDecoder(bytes.NewReader(b))
@@ -56,48 +47,7 @@ func Load(path string) (domain.Task, error) {
 	return t, nil
 }
 
-func hasTopLevelField(raw []byte, field string) bool {
-	var doc yaml.Node
-	if yaml.Unmarshal(raw, &doc) != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return false
-	}
-	for index := 0; index+1 < len(doc.Content[0].Content); index += 2 {
-		if doc.Content[0].Content[index].Value == field {
-			return true
-		}
-	}
-	return false
-}
 func Marshal(t domain.Task) ([]byte, error) { return yaml.Marshal(t) }
-
-func stripLegacyOpenSpecField(raw []byte) ([]byte, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return nil, err
-	}
-	if len(doc.Content) == 0 || len(doc.Content[0].Content)%2 != 0 {
-		return nil, fmt.Errorf("configuration must be a mapping")
-	}
-	root := doc.Content[0]
-	for i := 0; i < len(root.Content); i += 2 {
-		if root.Content[i].Value != "execution" {
-			continue
-		}
-		execution := root.Content[i+1]
-		if execution.Kind != yaml.MappingNode {
-			break
-		}
-		fields := make([]*yaml.Node, 0, len(execution.Content))
-		for j := 0; j+1 < len(execution.Content); j += 2 {
-			if execution.Content[j].Value != "create_openspec_change" {
-				fields = append(fields, execution.Content[j], execution.Content[j+1])
-			}
-		}
-		execution.Content = fields
-		break
-	}
-	return yaml.Marshal(&doc)
-}
 
 func Validate(t *domain.Task) error {
 	if t.Version == 0 {

@@ -1,15 +1,15 @@
 ## MODIFIED Requirements
 
 ### Requirement: Load a strict task configuration
-The CLI MUST decode `taskflow.yaml` with unknown fields rejected, apply the current internal configuration version, normalize source paths to absolute paths, derive the root from the selected task workspace, require `task.id` to match the selected task directory, preserve repository order, and use the first repository as primary. A top-level legacy `development` field MUST return `LEGACY_CONFIGURATION_UNSUPPORTED` with reinitialization guidance before any mutation.
+The CLI MUST decode `taskflow.yaml` with unknown fields rejected, apply the current internal configuration version, normalize source paths to absolute paths, derive the root from the selected task workspace, require `task.id` to match the selected task directory, preserve repository order, and use the first repository as primary. Removed fields are outside the current configuration contract and are rejected by strict decoding.
 
 #### Scenario: Reject an unknown YAML field
-- **WHEN** a task configuration contains an unrecognized field other than the recognized legacy development field
+- **WHEN** a task configuration contains an unrecognized field
 - **THEN** task loading returns a configuration error identifying that field
 
-#### Scenario: Reject legacy development configuration
+#### Scenario: Reject removed development configuration
 - **WHEN** a task configuration contains the removed top-level `development` field
-- **THEN** loading returns `LEGACY_CONFIGURATION_UNSUPPORTED`, preserves every workspace file, and advises reinitialization in an empty task directory
+- **THEN** loading returns a strict configuration error identifying `development`
 
 ### Requirement: Validate repository and dependency constraints
 The CLI MUST require unique repository names matching the supported name pattern, an existing source directory, worktree paths contained beneath the task's `worktrees` directory, and an acyclic `depends_on` graph whose references resolve to declared repositories. Loading and structural validation MUST NOT launch external commands.
@@ -24,9 +24,9 @@ The CLI MUST require unique repository names matching the supported name pattern
 
 ## ADDED Requirements
 
-### Requirement: Reject legacy task state without mutation
-Mutating and launch commands MUST require schema-v2 `.taskflow/state.json`. Schema-v1, malformed, or wrong-task state MUST return `STATE_INCOMPATIBLE` before changing task files, Git state, worktrees, or launching a child process.
+### Requirement: Require current task state
+Mutating and launch commands MUST require current-schema `.taskflow/state.json`. Old-schema, malformed, or wrong-task state MUST return `STATE_INCOMPATIBLE` before changing task files, Git state, worktrees, or launching a child process.
 
-#### Scenario: Reject a schema-v1 workspace
-- **WHEN** start, repo add, or open loads schema-v1 task state
-- **THEN** the command returns `STATE_INCOMPATIBLE`, preserves the existing workspace, and advises reinitialization
+#### Scenario: Reject an old-schema workspace
+- **WHEN** start, repo add, or open loads an old-schema task state
+- **THEN** the command returns `STATE_INCOMPATIBLE` and requires a current task workspace

@@ -1,6 +1,6 @@
 ## Context
 
-Taskflow currently persists a user configuration, a repository inventory snapshot, execution state, and validation reports. It also stores task-specific Codex/Claude executable policy even though `open` only needs a deterministic mapping from an already prepared workspace to a child process. Status derives publication and dependency-readiness booleans that its Git observations cannot fully establish. The CLI is young enough to take a deliberate breaking change, and the user selected rejection rather than automatic migration for existing task workspaces.
+Taskflow currently persists a user configuration, a repository inventory snapshot, execution state, and validation reports. It also stores task-specific Codex/Claude executable policy even though `open` only needs a deterministic mapping from an already prepared workspace to a child process. Status derives publication and dependency-readiness booleans that its Git observations cannot fully establish. The CLI is young enough to take a deliberate breaking change without carrying compatibility or migration code for existing task workspaces.
 
 ## Goals / Non-Goals
 
@@ -9,7 +9,7 @@ Taskflow currently persists a user configuration, a repository inventory snapsho
 - Preserve safe multi-repository worktree creation, recovery, validation, and one-command Codex/Claude launch.
 - Reduce persisted sources of truth to `taskflow.yaml`, `.taskflow/state.json`, and validation reports.
 - Make launch and status semantics directly testable from runtime facts.
-- Make the breaking boundary explicit and preserve every legacy file on rejection.
+- Make the breaking boundary explicit and keep the runtime model current-only.
 
 **Non-Goals:**
 
@@ -39,13 +39,13 @@ New initialization writes only YAML and state. Repository append snapshots and r
 
 Status retains raw branch, HEAD, dirty, upstream, ahead, behind, worktree errors, phase, and the historical validation report. It removes `pushed`, `dependencyReady`, and per-repository `lastValidationOK`. `validationConfigStale` only compares the report configuration digest to the current normalized configuration and does not claim that code is complete or currently validated.
 
-### Make the breaking boundary explicit
+### Make the release current-only
 
-State and validation report schemas advance to version 2. A YAML `development` key receives `LEGACY_CONFIGURATION_UNSUPPORTED`; schema-v1 state/report data is rejected or ignored as incompatible without mutation. Users reinitialize in an empty task directory or another tasks root. No automatic cleanup is performed.
+State and validation report schemas advance to version 2. Removed YAML fields are rejected by strict decoding, and old state/report data is not migrated or interpreted. Users reinitialize task workspaces for the current release.
 
 ## Risks / Trade-offs
 
-- [Existing workspaces stop loading] → Return precise migration guidance and preserve all files and worktrees.
+- [Existing workspaces stop loading] → Document the breaking release and require reinitialization.
 - [Fixed executable names reduce customization] → Rely on normal `PATH` selection and keep tool arguments fully forwardable.
 - [Historical validation can be mistaken for current validation] → Name config staleness narrowly and expose current Git facts beside the report.
 - [Removing inventory weakens snapshot auditing] → Continue canonical live Git common-directory and branch verification before mutations and launch.
@@ -55,8 +55,8 @@ State and validation report schemas advance to version 2. A YAML `development` k
 
 1. Fast-forward to the current `origin/main` baseline and land this as one breaking release.
 2. New tasks use the narrowed schema and state version 2.
-3. Legacy tasks fail read-only with explicit reinitialization guidance; users create a new empty task workspace and retain the old directory until they choose to remove it manually.
-4. Rollback is a code release rollback; legacy task files were never rewritten, so the prior binary can still read them.
+3. Existing tasks are outside the compatibility contract and must be reinitialized for this release.
+4. Rollback is a code release rollback; no migration data is maintained by the new binary.
 
 ## Open Questions
 

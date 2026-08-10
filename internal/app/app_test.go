@@ -68,7 +68,7 @@ func TestLifecycleDoesNotRequireRequirementFile(t *testing.T) {
 	}
 }
 
-func TestLoadStartStateCompatibility(t *testing.T) {
+func TestLoadStartStateRequiresCurrentSchema(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, ".taskflow")
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
@@ -86,21 +86,18 @@ func TestLoadStartStateCompatibility(t *testing.T) {
 		return raw
 	}
 
-	legacy := write(domain.State{SchemaVersion: 1, TaskID: "TASK", Phase: "initialized"})
+	old := write(domain.State{SchemaVersion: 1, TaskID: "TASK", Phase: "initialized"})
 	if _, exists, err := loadStartState(task); err == nil || !exists {
-		t.Fatalf("expected legacy state rejection: exists=%v err=%v", exists, err)
+		t.Fatalf("expected old state rejection: exists=%v err=%v", exists, err)
 	}
 	if result, code := (Service{}).Start(context.Background(), task, StartOptions{Execute: true}); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "STATE_INCOMPATIBLE") {
-		t.Fatalf("legacy start: code=%d result=%#v", code, result)
-	}
-	if got, err := os.ReadFile(filepath.Join(stateDir, "state.json")); err != nil || !bytes.Equal(got, legacy) {
-		t.Fatalf("legacy state changed: %q %v", got, err)
+		t.Fatalf("old state: code=%d result=%#v", code, result)
 	}
 	if result, code := (Service{}).Validate(context.Background(), task); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "STATE_INCOMPATIBLE") {
-		t.Fatalf("legacy validate: code=%d result=%#v", code, result)
+		t.Fatalf("old validate: code=%d result=%#v", code, result)
 	}
 	if _, err := os.Stat(validationReportPath(task)); !os.IsNotExist(err) {
-		t.Fatalf("legacy validation wrote report: %v", err)
+		t.Fatalf("old validation wrote report: %v", err)
 	}
 	corrupt := []byte("not-json")
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), corrupt, 0644); err != nil {
@@ -123,7 +120,7 @@ func TestLoadStartStateCompatibility(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(stateDir, "state.json")); err != nil || string(got) != string(wrong) {
 		t.Fatalf("incompatible state changed: %q %v", got, err)
 	}
-	_ = legacy
+	_ = old
 	_ = current
 }
 
@@ -281,10 +278,6 @@ func TestRepoAddRollsBackOnWriteFailure(t *testing.T) {
 	taskRoot := filepath.Join(tasks, "TASK-R")
 	stateDir := filepath.Join(taskRoot, ".taskflow")
 	beforeConfig, _ := os.ReadFile(filepath.Join(taskRoot, "taskflow.yaml"))
-	legacyInventory := []byte("legacy inventory\n")
-	if err := os.WriteFile(filepath.Join(stateDir, "inventory.json"), legacyInventory, 0644); err != nil {
-		t.Fatal(err)
-	}
 	beforeState, _ := os.ReadFile(filepath.Join(stateDir, "state.json"))
 	if err := os.Chmod(stateDir, 0500); err != nil {
 		t.Fatal(err)
@@ -297,9 +290,6 @@ func TestRepoAddRollsBackOnWriteFailure(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(filepath.Join(taskRoot, "taskflow.yaml")); !bytes.Equal(beforeConfig, after) {
 		t.Fatal("configuration was not rolled back")
-	}
-	if after, _ := os.ReadFile(filepath.Join(stateDir, "inventory.json")); !bytes.Equal(legacyInventory, after) {
-		t.Fatal("inventory was changed")
 	}
 	if after, _ := os.ReadFile(filepath.Join(stateDir, "state.json")); !bytes.Equal(beforeState, after) {
 		t.Fatal("state was changed")
@@ -346,11 +336,6 @@ func TestRepoAddAppendsAcrossPhasesAndPreservesOutcomes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			legacyInventoryPath := filepath.Join(tasks, "TASK-9", ".taskflow", "inventory.json")
-			legacyInventory := []byte("legacy inventory must remain untouched\n")
-			if err := os.WriteFile(legacyInventoryPath, legacyInventory, 0644); err != nil {
-				t.Fatal(err)
-			}
 			if phase == "started" || phase == "failed" {
 				running := task
 				if phase == "failed" {
@@ -370,9 +355,6 @@ func TestRepoAddAppendsAcrossPhasesAndPreservesOutcomes(t *testing.T) {
 			result, code := s.RepoAdd(context.Background(), task, RepoAddOptions{Repository: "repo2=" + repo2, DependsOn: []string{"repo1"}})
 			if code != report.ExitOK || !result.OK {
 				t.Fatalf("repo add: %d %#v", code, result)
-			}
-			if after, err := os.ReadFile(legacyInventoryPath); err != nil || !bytes.Equal(after, legacyInventory) {
-				t.Fatalf("legacy inventory changed: %q %v", after, err)
 			}
 			merged, err := s.Load(tasks, "TASK-9")
 			if err != nil {
