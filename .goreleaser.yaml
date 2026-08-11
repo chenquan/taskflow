@@ -23,7 +23,7 @@ archives:
         formats: [zip]
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-next"
+  name_template: "{{ incpatch .Version }}-next"
 
 checksum:
   name_template: checksums.txt
@@ -31,5 +31,6 @@ checksum:
 changelog:
   disable: true
 
+# 开启发布功能（默认即为 false，这里显式声明以确保生效）
 release:
-  disable: true
+  disable: false
