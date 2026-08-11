@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*' # 仅在推送 v 开头的 Tag 时触发
+
+permissions:
+  contents: write # 必须拥有写入权限才能创建 Release 和上传文件
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # GoReleaser 需要完整的 Git 历史来生成 Changelog 和版本号
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean # 移除 --snapshot，执行真正的发布
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 注入 GitHub 官方提供的 Token 用于认证
