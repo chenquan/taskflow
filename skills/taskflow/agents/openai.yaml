@@ -1,4 +1,4 @@
 interface:
-  display_name: "Taskflow AI Workspace"
-  short_description: "Safely coordinate multi-repository AI workspaces"
-  default_prompt: "Use $taskflow to prepare, coordinate, and safely operate this multi-repository AI coding task."
+  display_name: "Taskflow 工作区向导"
+  short_description: "向导式安全管理多仓库 AI 工作区"
+  default_prompt: "使用 $taskflow 判断当前任务阶段，并安全完成多仓库工作区的准备、启动或验证。"
