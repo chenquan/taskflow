@@ -39,6 +39,10 @@ type InitOptions struct {
 	Repositories      []string
 }
 
+func defaultTaskBranch(taskID string) string {
+	return "feature/" + strings.ToLower(taskID)
+}
+
 func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report.ExitCode) {
 	res := report.New("init", o.TaskID)
 	if o.TasksRoot == "" || o.TaskID == "" || len(o.Repositories) == 0 {
@@ -55,6 +59,7 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 		return res, report.ExitConfig
 	}
 	taskRoot := filepath.Join(root, o.TaskID)
+	branch := defaultTaskBranch(o.TaskID)
 	repos := make([]domain.Repository, 0, len(o.Repositories))
 	for _, raw := range o.Repositories {
 		parts := strings.SplitN(raw, "=", 2)
@@ -71,7 +76,12 @@ func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report
 			res.Fail(report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: parts[0], Message: err.Error()})
 			return res, report.ExitConfig
 		}
-		repos = append(repos, domain.Repository{Name: parts[0], Source: source, Worktree: filepath.Join("worktrees", parts[0])})
+		base, baseErr := s.Git.DefaultBase(ctx, source)
+		if baseErr != nil {
+			res.Fail(report.Diagnostic{Code: "REMOTE_DEFAULT_UNAVAILABLE", Repo: parts[0], Message: baseErr.Error()})
+			return res, report.ExitEnvironment
+		}
+		repos = append(repos, domain.Repository{Name: parts[0], Source: source, Base: base, Branch: branch, Worktree: filepath.Join("worktrees", parts[0])})
 	}
 	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: root}, Repositories: repos}
 	if err = config.Validate(&t); err != nil {
@@ -236,11 +246,15 @@ func (s Service) prepareRepoAdd(ctx context.Context, t domain.Task, o RepoAddOpt
 	if err != nil {
 		return empty, &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: name, Message: err.Error()}, report.ExitEnvironment
 	}
+	base, err := s.Git.DefaultBase(ctx, source)
+	if err != nil {
+		return empty, &report.Diagnostic{Code: "REMOTE_DEFAULT_UNAVAILABLE", Repo: name, Message: err.Error()}, report.ExitEnvironment
+	}
 	repository := domain.Repository{
 		Name:      name,
 		Source:    source,
-		Base:      "HEAD",
-		Branch:    "feature/" + strings.ToLower(t.Task.ID),
+		Base:      base,
+		Branch:    defaultTaskBranch(t.Task.ID),
 		Worktree:  filepath.Join("worktrees", name),
 		DependsOn: append([]string(nil), o.DependsOn...),
 	}

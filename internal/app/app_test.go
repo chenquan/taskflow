@@ -23,7 +23,7 @@ func makeGitRepo(t *testing.T) string {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"init", dir}, {"-C", dir, "config", "user.email", "test@example.com"}, {"-C", dir, "config", "user.name", "Test"}, {"-C", dir, "commit", "--allow-empty", "-m", "init"}} {
+	for _, args := range [][]string{{"init", "-b", "main", dir}, {"-C", dir, "config", "user.email", "test@example.com"}, {"-C", dir, "config", "user.name", "Test"}, {"-C", dir, "commit", "--allow-empty", "-m", "init"}, {"-C", dir, "remote", "add", "origin", "https://example.test/repo.git"}, {"-C", dir, "update-ref", "refs/remotes/origin/main", "HEAD"}, {"-C", dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"}} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
@@ -52,6 +52,9 @@ func TestLifecycleDoesNotRequireRequirementFile(t *testing.T) {
 	task, err := s.Load(tasks, "TASK-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if task.Repositories[0].Base != "origin/main" || task.Repositories[0].Branch != "feature/task-1" {
+		t.Fatalf("unexpected defaults: %#v", task.Repositories[0])
 	}
 	if result, code := s.Start(context.Background(), task, StartOptions{Execute: true}); code != report.ExitOK || !result.OK {
 		t.Fatalf("start: code=%d result=%#v", code, result)
@@ -364,7 +367,7 @@ func TestRepoAddAppendsAcrossPhasesAndPreservesOutcomes(t *testing.T) {
 				t.Fatalf("unexpected repositories: %#v", merged.Repositories)
 			}
 			appended := merged.Repositories[1]
-			if appended.Base != "HEAD" || appended.Branch != "feature/task-9" || appended.Worktree != filepath.Join("worktrees", "repo2") || len(appended.DependsOn) != 1 || appended.DependsOn[0] != "repo1" {
+			if appended.Base == "HEAD" || appended.Base != "origin/main" || appended.Branch != "feature/task-9" || appended.Worktree != filepath.Join("worktrees", "repo2") || len(appended.DependsOn) != 1 || appended.DependsOn[0] != "repo1" {
 				t.Fatalf("unexpected appended defaults: %#v", appended)
 			}
 			state := loadAppState(t, tasks, "TASK-9")

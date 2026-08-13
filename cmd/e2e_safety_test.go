@@ -81,7 +81,7 @@ func copyFixture(source, target string) error {
 
 func makeSafetyRepo(t *testing.T, path string) string {
 	t.Helper()
-	for _, args := range [][]string{{"init", "-b", "main", path}, {"-C", path, "config", "user.email", "e2e@example.com"}, {"-C", path, "config", "user.name", "E2E"}, {"-C", path, "commit", "--allow-empty", "-m", "initial"}} {
+	for _, args := range [][]string{{"init", "-b", "main", path}, {"-C", path, "config", "user.email", "e2e@example.com"}, {"-C", path, "config", "user.name", "E2E"}, {"-C", path, "commit", "--allow-empty", "-m", "initial"}, {"-C", path, "remote", "add", "origin", "https://example.test/repo.git"}, {"-C", path, "update-ref", "refs/remotes/origin/main", "HEAD"}, {"-C", path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"}} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
@@ -348,8 +348,12 @@ func TestE2EActionFailureBranchConflictAndToolLifecycle(t *testing.T) {
 	if out, err := runSafetyCobra(t, f.tasks, "init", "occupied", "--repo", "repo="+f.repo); err != nil {
 		t.Fatal(out, err)
 	}
+	occupiedTask, err := config.Load(filepath.Join(f.tasks, "occupied", "taskflow.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	occupiedTarget := filepath.Join(f.root, "existing-worktree")
-	if output, err := exec.Command("git", "-C", f.repo, "worktree", "add", "-b", "feature/occupied", occupiedTarget, "HEAD").CombinedOutput(); err != nil {
+	if output, err := exec.Command("git", "-C", f.repo, "worktree", "add", "-b", occupiedTask.Repositories[0].Branch, occupiedTarget, "HEAD").CombinedOutput(); err != nil {
 		t.Fatalf("occupy branch: %v: %s", err, output)
 	}
 	out, err = runSafetyCobra(t, f.tasks, "--json", "start", "occupied", "--execute")
@@ -426,7 +430,7 @@ func TestE2EOpenPassesThroughExtraArgsAndPermissionBypass(t *testing.T) {
 func TestE2EResumesCompletedActionsAndRejectsIncompatibleState(t *testing.T) {
 	f := newSafetyFixture(t)
 	remote := filepath.Join(f.root, "resume-remote.git")
-	for _, args := range [][]string{{"init", "--bare", remote}, {"-C", f.repo, "remote", "add", "origin", remote}, {"-C", f.repo, "push", "-u", "origin", "main"}} {
+	for _, args := range [][]string{{"init", "--bare", remote}, {"-C", f.repo, "remote", "set-url", "origin", remote}, {"-C", f.repo, "push", "-u", "origin", "main"}} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
@@ -500,7 +504,7 @@ func TestE2EResumesCompletedActionsAndRejectsIncompatibleState(t *testing.T) {
 func TestE2EIdempotentInitializationFetchAndUnknownRepository(t *testing.T) {
 	f := newSafetyFixture(t)
 	remote := filepath.Join(f.root, "remote.git")
-	for _, args := range [][]string{{"init", "--bare", remote}, {"-C", f.repo, "remote", "add", "origin", remote}, {"-C", f.repo, "push", "-u", "origin", "main"}} {
+	for _, args := range [][]string{{"init", "--bare", remote}, {"-C", f.repo, "remote", "set-url", "origin", remote}, {"-C", f.repo, "push", "-u", "origin", "main"}} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
