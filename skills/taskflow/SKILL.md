@@ -44,7 +44,7 @@ taskflow --tasks-root <tasks-root> init <task-id> \
 taskflow --tasks-root <tasks-root> start <task-id> --dry-run
 ```
 
-`init` 只写任务元数据，不创建分支或 worktree。dry-run 后报告仓库顺序、依赖顺序、fetch/worktree 计划和冲突；只有用户明确批准后才运行：
+`init` 只写任务元数据，不创建分支或 worktree。新仓库默认从源仓库的 `origin/HEAD` 解析 `base`，并生成 `feature/<task-id>` 分支；若 `origin/HEAD` 不可用，先修复远程默认分支配置，不要手动退回 `HEAD`。dry-run 后报告仓库顺序、依赖顺序、fetch/worktree 计划和冲突；只有用户明确批准后才运行：
 
 ```bash
 taskflow --json --tasks-root <tasks-root> start <task-id> --execute
@@ -77,6 +77,8 @@ taskflow --tasks-root <tasks-root> repo add <task-id> \
 taskflow --tasks-root <tasks-root> start <task-id> --dry-run
 taskflow --tasks-root <tasks-root> start <task-id> --execute
 ```
+
+追加仓库使用其自身 `origin/HEAD` 作为默认基线，并继承任务分支命名规则。
 
 `depends_on` 只表示 start 和 validate 的执行顺序，不表示仓库所有权、接口契约或交付完成度。
 

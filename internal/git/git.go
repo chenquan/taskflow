@@ -98,6 +98,23 @@ func (c Client) HasRef(ctx context.Context, path, ref string) bool {
 	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "rev-parse", "--verify", "--quiet", ref + "^{commit}"}})
 	return err == nil
 }
+
+// DefaultBase resolves the source repository's remote default branch without
+// fetching or changing Git state.
+func (c Client) DefaultBase(ctx context.Context, path string) (string, error) {
+	head, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"}})
+	if err != nil {
+		return "", fmt.Errorf("origin/HEAD is not configured")
+	}
+	ref := strings.TrimSpace(head.Stdout)
+	if !strings.HasPrefix(ref, "origin/") || strings.TrimPrefix(ref, "origin/") == "" {
+		return "", fmt.Errorf("origin/HEAD resolves to invalid reference %q", ref)
+	}
+	if !c.HasRef(ctx, path, ref) {
+		return "", fmt.Errorf("remote default reference %s is unavailable locally", ref)
+	}
+	return ref, nil
+}
 func (c Client) Worktrees(ctx context.Context, path string) ([]Worktree, error) {
 	r, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "worktree", "list", "--porcelain"}})
 	if err != nil {

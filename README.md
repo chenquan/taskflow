@@ -123,6 +123,8 @@ execution:
 
 `source` 使用绝对路径，`worktree` 必须位于任务的 `worktrees/` 目录内。修改已启动任务的仓库集合只能使用 `repo add`；其他配置漂移会被 state digest 拒绝。
 
+新任务默认从每个源仓库的 `origin/HEAD` 解析远程主干（例如 `origin/main`），并生成 `feature/<task-id>` 分支。`repo add` 使用相同的任务分支。显式填写的 `base` 和 `branch` 保持不变。若 `origin/HEAD` 缺失或对应远程引用不可用，`init`/`repo add` 会在写入任务元数据前失败。
+
 ## 状态和验证
 
 ```bash
