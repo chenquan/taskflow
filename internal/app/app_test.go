@@ -301,7 +301,7 @@ func TestOpenUsesLiveIdentityAndAllowsDirtyWorktree(t *testing.T) {
 	if code != report.ExitOK || !result.OK || runner.calls != 1 {
 		t.Fatalf("open: code=%d calls=%d result=%#v", code, runner.calls, result)
 	}
-	if runner.spec.Dir != filepath.Join(task.Task.Root, task.Repositories[0].Worktree) || runner.spec.Executable != "/tools/codex" {
+	if runner.spec.Dir != filepath.Join(task.Task.Root, task.Repositories[0].Worktree) || runner.spec.Executable != filepath.Join("/tools", "codex") {
 		t.Fatalf("launch spec: %#v", runner.spec)
 	}
 	if !containsPair(runner.spec.Args, "--model", "test") {

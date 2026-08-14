@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -67,8 +68,12 @@ func TestE2ECreateJSONAndOpenCLI(t *testing.T) {
 		}
 	}
 	toolDir := t.TempDir()
-	tool := filepath.Join(toolDir, "codex")
-	if err := os.WriteFile(tool, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+	toolName, toolContents := "codex", []byte("#!/bin/sh\nexit 0\n")
+	if runtime.GOOS == "windows" {
+		toolName, toolContents = "codex.cmd", []byte("@echo off\r\nexit /b 0\r\n")
+	}
+	tool := filepath.Join(toolDir, toolName)
+	if err := os.WriteFile(tool, toolContents, 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+os.Getenv("PATH"))
