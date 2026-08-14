@@ -6,9 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/chenquan/taskflow/internal/domain"
 	"github.com/chenquan/taskflow/internal/fsx"
@@ -25,6 +23,7 @@ func ValidateTaskID(taskID string) error {
 }
 
 func Path(tasksRoot, taskID string) string { return filepath.Join(tasksRoot, taskID, "taskflow.yaml") }
+
 func Load(path string) (domain.Task, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -65,7 +64,7 @@ func Validate(t *domain.Task) error {
 	if strings.TrimSpace(t.Task.Root) == "" {
 		return fmt.Errorf("task.root is required")
 	}
-	root, err := fsx.CanonicalExisting(t.Task.Root)
+	root, err := fsx.CanonicalManaged(t.Task.Root)
 	if err != nil {
 		return fmt.Errorf("task.root: %w", err)
 	}
@@ -73,17 +72,18 @@ func Validate(t *domain.Task) error {
 	if len(t.Repositories) == 0 {
 		return fmt.Errorf("at least one repository is required")
 	}
-	seen := map[string]bool{}
-	worktrees := filepath.Join(root, "worktrees")
+	seenNames := map[string]bool{}
+	seenTargets := map[string]string{}
+	worktreesRoot := filepath.Join(root, "worktrees")
 	for i := range t.Repositories {
 		r := &t.Repositories[i]
 		if !repoName.MatchString(r.Name) {
 			return fmt.Errorf("invalid repository name %q", r.Name)
 		}
-		if seen[r.Name] {
+		if seenNames[r.Name] {
 			return fmt.Errorf("duplicate repository %q", r.Name)
 		}
-		seen[r.Name] = true
+		seenNames[r.Name] = true
 		source, err := fsx.CanonicalExisting(r.Source)
 		if err != nil {
 			return fmt.Errorf("repository %s source: %w", r.Name, err)
@@ -93,6 +93,12 @@ func Validate(t *domain.Task) error {
 			return fmt.Errorf("repository %s source is not a directory", r.Name)
 		}
 		r.Source = source
+		if r.Base == "" {
+			r.Base = "HEAD"
+		}
+		if r.Branch == "" {
+			r.Branch = "feature/" + strings.ToLower(t.Task.ID)
+		}
 		if r.Worktree == "" {
 			r.Worktree = filepath.Join("worktrees", r.Name)
 		}
@@ -104,78 +110,19 @@ func Validate(t *domain.Task) error {
 		if err != nil {
 			return fmt.Errorf("repository %s worktree: %w", r.Name, err)
 		}
-		if !fsx.Within(worktrees, target) {
+		if !fsx.Within(worktreesRoot, target) {
 			return fmt.Errorf("repository %s worktree escapes task worktrees", r.Name)
 		}
+		key := filepath.Clean(target)
+		if other, exists := seenTargets[key]; exists {
+			return fmt.Errorf("repositories %s and %s use the same worktree target", other, r.Name)
+		}
+		seenTargets[key] = r.Name
 		rel, err := filepath.Rel(root, target)
 		if err != nil {
 			return err
 		}
 		r.Worktree = rel
-		if r.Base == "" {
-			r.Base = "HEAD"
-		}
-		if r.Branch == "" {
-			r.Branch = "feature/" + strings.ToLower(t.Task.ID)
-		}
-		for _, c := range r.Checks {
-			if c.Name == "" || c.Executable == "" {
-				return fmt.Errorf("repository %s has invalid check", r.Name)
-			}
-			if c.Timeout != "" {
-				if _, err := time.ParseDuration(c.Timeout); err != nil {
-					return fmt.Errorf("repository %s check %s has invalid timeout: %w", r.Name, c.Name, err)
-				}
-			}
-		}
-	}
-	for _, r := range t.Repositories {
-		for _, dep := range r.DependsOn {
-			if !seen[dep] {
-				return fmt.Errorf("repository %s depends on unknown repository %s", r.Name, dep)
-			}
-		}
-	}
-	if err := checkAcyclic(t.Repositories); err != nil {
-		return err
-	}
-	return nil
-}
-
-func checkAcyclic(repos []domain.Repository) error {
-	by := map[string]domain.Repository{}
-	for _, r := range repos {
-		by[r.Name] = r
-	}
-	visiting := map[string]bool{}
-	done := map[string]bool{}
-	var visit func(string) error
-	visit = func(n string) error {
-		if visiting[n] {
-			return fmt.Errorf("repository dependency cycle includes %s", n)
-		}
-		if done[n] {
-			return nil
-		}
-		visiting[n] = true
-		for _, d := range by[n].DependsOn {
-			if err := visit(d); err != nil {
-				return err
-			}
-		}
-		visiting[n] = false
-		done[n] = true
-		return nil
-	}
-	names := make([]string, 0, len(by))
-	for n := range by {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		if err := visit(n); err != nil {
-			return err
-		}
 	}
 	return nil
 }

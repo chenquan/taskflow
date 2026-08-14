@@ -1,19 +1,17 @@
 ## Purpose
 
 Define the safe multi-repository orchestration guidance shared by development agents.
-
 ## Requirements
-
 ### Requirement: Guide safe multi-repository orchestration
-The skill SHALL instruct an agent to locate the task, inspect configuration, inventory, state, and validation facts, use dry-run before execute, and use status/validate after implementation.
+The skill SHALL instruct an agent to locate the task, inspect taskflow.yaml, use create dry-run before execute, and use open only after every configured worktree is structurally ready. It MUST NOT require state, inventory, validation, dependencies, repository roles, or contract owners.
 
-#### Scenario: Infer repository roles
-- **WHEN** an agent receives a task with multiple repositories
-- **THEN** it presents proposed roles, dependencies, and contract owner, then obtains confirmation and explicit execute approval before start execute
+#### Scenario: Prepare multiple repositories
+- **WHEN** an agent receives a Taskflow task with multiple repositories
+- **THEN** it reports repository order, obtains explicit execute approval, runs create, and opens the requested built-in tool only after live worktree checks succeed
 
 ### Requirement: Keep deterministic actions in the CLI
-The skill MUST instruct agents to use `taskflow` for task-workspace, worktree, fetch, and tool-launch mutations and MUST prohibit shell composition, permission bypass flags, and implicit archive/cleanup/push/PR actions.
+The skill MUST instruct agents to use taskflow for workspace, worktree, lock, and built-in tool-launch mutations and MUST prohibit shell-composed replacements, implicit cleanup/push/PR actions, and nested worktree launch flags. Arguments explicitly supplied after `--` MUST be passed through without Taskflow policy interpretation.
 
 #### Scenario: User requests execution
-- **WHEN** a user approves a prepared start plan
-- **THEN** the agent invokes the CLI execute command and reports its machine-readable result
+- **WHEN** a user approves a prepared create plan
+- **THEN** the agent invokes create execute, reports its machine-readable result, and recommends open only when every worktree is ready

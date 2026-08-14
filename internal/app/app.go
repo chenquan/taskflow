@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/chenquan/taskflow/internal/config"
 	"github.com/chenquan/taskflow/internal/devtool"
@@ -34,117 +31,202 @@ func New() Service {
 	return Service{Runner: r, Git: git.Client{Runner: r}}
 }
 
-type InitOptions struct {
+type CreateOptions struct {
 	TasksRoot, TaskID string
 	Repositories      []string
+	DryRun            bool
+	Execute           bool
 }
 
-func (s Service) Init(ctx context.Context, o InitOptions) (report.Result, report.ExitCode) {
-	res := report.New("init", o.TaskID)
-	if o.TasksRoot == "" || o.TaskID == "" || len(o.Repositories) == 0 {
-		res.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "tasks root, task id, and at least one --repo are required"})
+type createResolution struct {
+	task                 domain.Task
+	configurationChanged bool
+}
+
+func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, report.ExitCode) {
+	res := report.New("create", o.TaskID)
+	if o.TasksRoot == "" || o.TaskID == "" {
+		res.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "tasks root and task id are required"})
+		return res, report.ExitConfig
+	}
+	if o.DryRun && o.Execute {
+		res.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "--dry-run and --execute are mutually exclusive"})
 		return res, report.ExitConfig
 	}
 	if err := config.ValidateTaskID(o.TaskID); err != nil {
 		res.Fail(report.Diagnostic{Code: "INVALID_TASK_ID", Message: err.Error()})
 		return res, report.ExitConfig
 	}
-	root, err := fsx.CanonicalExisting(o.TasksRoot)
+	tasksRoot, err := fsx.CanonicalExisting(o.TasksRoot)
 	if err != nil {
 		res.Fail(report.Diagnostic{Code: "TASKS_ROOT_NOT_FOUND", Message: err.Error()})
 		return res, report.ExitConfig
 	}
-	taskRoot := filepath.Join(root, o.TaskID)
-	repos := make([]domain.Repository, 0, len(o.Repositories))
-	for _, raw := range o.Repositories {
-		parts := strings.SplitN(raw, "=", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			res.Fail(report.Diagnostic{Code: "INVALID_REPOSITORY", Message: "--repo must use name=path"})
-			return res, report.ExitConfig
-		}
-		source, err := fsx.CanonicalExisting(parts[1])
-		if err != nil {
-			res.Fail(report.Diagnostic{Code: "REPOSITORY_NOT_FOUND", Repo: parts[0], Message: err.Error()})
-			return res, report.ExitConfig
-		}
-		if _, err = s.Git.Inspect(ctx, source); err != nil {
-			res.Fail(report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: parts[0], Message: err.Error()})
-			return res, report.ExitConfig
-		}
-		repos = append(repos, domain.Repository{Name: parts[0], Source: source, Worktree: filepath.Join("worktrees", parts[0])})
+
+	resolved, diagnostic, code := s.resolveCreate(ctx, tasksRoot, o)
+	if diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
 	}
-	t := domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: root}, Repositories: repos}
-	if err = config.Validate(&t); err != nil {
-		res.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
-		return res, report.ExitConfig
+	items, diagnostic, code := s.preflightCreate(ctx, resolved.task)
+	if diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
 	}
-	t.Task.Root = taskRoot
-	if err = os.MkdirAll(taskRoot, 0755); err != nil {
+	res.Data = createData(resolved.task, items, !o.Execute)
+	if !o.Execute {
+		return res, report.ExitOK
+	}
+
+	if err = os.MkdirAll(resolved.task.Task.Root, 0755); err != nil {
 		res.Fail(report.Diagnostic{Code: "CREATE_TASK_FAILED", Message: err.Error()})
 		return res, report.ExitExecution
 	}
-	l, err := lock.Acquire(taskRoot)
+	taskLock, err := lock.Acquire(resolved.task.Task.Root)
 	if err != nil {
 		res.Fail(report.Diagnostic{Code: "TASK_LOCKED", Message: err.Error()})
 		return res, report.ExitConflict
 	}
-	defer l.Release()
-	p := config.Path(root, o.TaskID)
-	if _, err = os.Stat(p); err == nil {
-		existing, e := config.Load(p)
-		if e == nil && equivalent(existing, t) {
-			_, exists, stateErr := loadStartState(existing)
-			if stateErr != nil || !exists {
-				message := "state file is missing; reinitialize the task in an empty directory"
-				if stateErr != nil {
-					message = stateErr.Error()
-				}
-				res.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: message})
-				return res, report.ExitConfig
-			}
-			res.Data = map[string]any{"path": taskRoot, "initialized": false}
-			return res, report.ExitOK
-		}
-		res.Fail(report.Diagnostic{Code: "INITIALIZATION_CONFLICT", Message: "task workspace already has different configuration"})
-		return res, report.ExitConfig
+	defer taskLock.Release()
+
+	// Resolve and inspect again after acquiring the task lock so an append
+	// cannot race with another create that changed taskflow.yaml.
+	resolved, diagnostic, code = s.resolveCreate(ctx, tasksRoot, o)
+	if diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
 	}
-	entries, readErr := os.ReadDir(taskRoot)
-	if readErr == nil {
-		for _, entry := range entries {
-			if entry.Name() != ".taskflow" {
-				res.Fail(report.Diagnostic{Code: "UNMANAGED_TASK_DIRECTORY", Message: "task directory contains unmanaged files"})
-				return res, report.ExitConfig
-			}
+	sourceLocks, diagnostic, code := s.acquireSourceLocks(ctx, resolved.task.Repositories)
+	if diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
+	}
+	defer releaseSourceLocks(sourceLocks)
+	items, diagnostic, code = s.preflightCreate(ctx, resolved.task)
+	if diagnostic != nil {
+		res.Fail(*diagnostic)
+		return res, code
+	}
+	if resolved.configurationChanged {
+		if err = writeTaskConfig(resolved.task); err != nil {
+			res.Fail(report.Diagnostic{Code: "WRITE_TASK_FAILED", Message: err.Error()})
+			return res, report.ExitExecution
 		}
 	}
-	if err = writeTask(t); err != nil {
-		res.Fail(report.Diagnostic{Code: "WRITE_TASK_FAILED", Message: err.Error()})
+	if err = os.MkdirAll(filepath.Join(resolved.task.Task.Root, "worktrees"), 0755); err != nil {
+		res.Fail(report.Diagnostic{Code: "CREATE_WORKTREES_FAILED", Message: err.Error()})
 		return res, report.ExitExecution
 	}
-	res.Data = map[string]any{"path": taskRoot, "initialized": true}
+	for index, repository := range resolved.task.Repositories {
+		if items[index].Status == "reuse" {
+			continue
+		}
+		target := filepath.Join(resolved.task.Task.Root, repository.Worktree)
+		if err = os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			items[index].Status = "failed"
+			res.Data = createData(resolved.task, items, false)
+			res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
+			return res, report.ExitPartial
+		}
+		if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, target, repository.Base); err != nil {
+			items[index].Status = "failed"
+			res.Data = createData(resolved.task, items, false)
+			res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
+			return res, report.ExitPartial
+		}
+		items[index].Status = "created"
+	}
+	res.Data = createData(resolved.task, items, false)
 	return res, report.ExitOK
 }
-func equivalent(a, b domain.Task) bool {
-	ab, _ := config.Marshal(a)
-	bb, _ := config.Marshal(b)
-	return string(ab) == string(bb)
+
+func createData(task domain.Task, items []plan.Item, dryRun bool) map[string]any {
+	return map[string]any{
+		"dryRun":        dryRun,
+		"configuration": task,
+		"actions":       items,
+	}
 }
-func writeTask(t domain.Task) error {
-	root := t.Task.Root
-	raw, err := config.Marshal(t)
+
+func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOptions) (createResolution, *report.Diagnostic, report.ExitCode) {
+	taskRoot := filepath.Join(tasksRoot, o.TaskID)
+	configPath := filepath.Join(taskRoot, "taskflow.yaml")
+	_, statErr := os.Stat(configPath)
+	configurationExists := statErr == nil
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return createResolution{}, &report.Diagnostic{Code: "READ_TASK_FAILED", Message: statErr.Error()}, report.ExitExecution
+	}
+
+	var task domain.Task
+	if configurationExists {
+		loaded, err := config.Load(configPath)
+		if err != nil {
+			return createResolution{}, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
+		}
+		if err := rejectLegacyRuntime(taskRoot); err != nil {
+			return createResolution{}, &report.Diagnostic{Code: "LEGACY_WORKSPACE", Message: err.Error()}, report.ExitConfig
+		}
+		task = loaded
+	} else {
+		if err := rejectUnmanagedTaskDirectory(taskRoot); err != nil {
+			return createResolution{}, &report.Diagnostic{Code: "UNMANAGED_TASK_DIRECTORY", Message: err.Error()}, report.ExitConfig
+		}
+		task = domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: taskRoot}}
+	}
+	if len(o.Repositories) == 0 {
+		if !configurationExists {
+			return createResolution{}, &report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "at least one --repo is required for a new task"}, report.ExitConfig
+		}
+		return createResolution{task: task}, nil, report.ExitOK
+	}
+
+	existing := make(map[string]bool, len(task.Repositories))
+	for _, repository := range task.Repositories {
+		existing[repository.Name] = true
+	}
+	for _, raw := range o.Repositories {
+		repository, err := resolveRepository(o.TaskID, raw)
+		if err != nil {
+			return createResolution{}, &report.Diagnostic{Code: "INVALID_REPOSITORY", Message: err.Error()}, report.ExitConfig
+		}
+		if existing[repository.Name] {
+			return createResolution{}, &report.Diagnostic{Code: "REPOSITORY_EXISTS", Repo: repository.Name, Message: "repository already exists in the task"}, report.ExitConfig
+		}
+		existing[repository.Name] = true
+		task.Repositories = append(task.Repositories, repository)
+	}
+	if err := config.Validate(&task); err != nil {
+		return createResolution{}, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
+	}
+	return createResolution{task: task, configurationChanged: true}, nil, report.ExitOK
+}
+
+func resolveRepository(taskID, raw string) (domain.Repository, error) {
+	parts := strings.SplitN(raw, "=", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return domain.Repository{}, fmt.Errorf("--repo must use name=path")
+	}
+	source, err := fsx.CanonicalExisting(parts[1])
+	if err != nil {
+		return domain.Repository{}, err
+	}
+	return domain.Repository{
+		Name:     parts[0],
+		Source:   source,
+		Base:     "HEAD",
+		Branch:   "feature/" + strings.ToLower(taskID),
+		Worktree: filepath.Join("worktrees", parts[0]),
+	}, nil
+}
+
+func writeTaskConfig(task domain.Task) error {
+	raw, err := config.Marshal(task)
 	if err != nil {
 		return err
 	}
-	if err = fsx.AtomicWrite(filepath.Join(root, "taskflow.yaml"), raw, 0644); err != nil {
-		return err
-	}
-	state := domain.State{SchemaVersion: domain.StateSchemaVersion, TaskID: t.Task.ID, Phase: "initialized", UpdatedAt: time.Now().UTC()}
-	b, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	return fsx.AtomicWrite(filepath.Join(root, ".taskflow", "state.json"), append(b, '\n'), 0644)
+	return fsx.AtomicWrite(filepath.Join(task.Task.Root, "taskflow.yaml"), raw, 0644)
 }
+
 func (s Service) Load(tasksRoot, taskID string) (domain.Task, error) {
 	if err := config.ValidateTaskID(taskID); err != nil {
 		return domain.Task{}, err
@@ -156,350 +238,94 @@ func (s Service) Load(tasksRoot, taskID string) (domain.Task, error) {
 	if task.Task.ID != taskID {
 		return domain.Task{}, fmt.Errorf("task.id %q does not match task directory %q", task.Task.ID, taskID)
 	}
+	if err := rejectLegacyRuntime(task.Task.Root); err != nil {
+		return domain.Task{}, err
+	}
 	return task, nil
 }
 
-type RepoAddOptions struct {
-	Repository string
-	DependsOn  []string
-	DryRun     bool
+func rejectUnmanagedTaskDirectory(taskRoot string) error {
+	entries, err := os.ReadDir(taskRoot)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".taskflow" {
+			return fmt.Errorf("task directory contains unmanaged entry %q", entry.Name())
+		}
+	}
+	return rejectLegacyRuntime(taskRoot)
 }
 
-type repoAddPlan struct {
-	repository domain.Repository
-	merged     domain.Task
-	state      domain.State
-	digest     string
-	actions    []plan.Item
+func rejectLegacyRuntime(taskRoot string) error {
+	runtimeRoot := filepath.Join(taskRoot, ".taskflow")
+	entries, err := os.ReadDir(runtimeRoot)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() != "lock" {
+			return fmt.Errorf("legacy runtime artifact %q exists; recreate the task workspace", filepath.Join(".taskflow", entry.Name()))
+		}
+	}
+	return nil
 }
 
-func (s Service) RepoAdd(ctx context.Context, t domain.Task, o RepoAddOptions) (report.Result, report.ExitCode) {
-	res := report.New("repo add", t.Task.ID)
-	if o.DryRun {
-		prepared, diagnostic, code := s.prepareRepoAdd(ctx, t, o)
-		if diagnostic != nil {
-			res.Fail(*diagnostic)
-			return res, code
-		}
-		res.Data = map[string]any{"dryRun": true, "added": prepared.repository, "actions": prepared.actions}
-		return res, report.ExitOK
-	}
-	l, err := lock.Acquire(t.Task.Root)
+func (s Service) preflightCreate(ctx context.Context, task domain.Task) ([]plan.Item, *report.Diagnostic, report.ExitCode) {
+	items, err := plan.Build(task)
 	if err != nil {
-		res.Fail(report.Diagnostic{Code: "TASK_LOCKED", Message: err.Error()})
-		return res, report.ExitConflict
+		return nil, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
 	}
-	defer l.Release()
-	prepared, diagnostic, code := s.prepareRepoAdd(ctx, t, o)
-	if diagnostic != nil {
-		res.Fail(*diagnostic)
-		return res, code
-	}
-	if err := writeRepoAdd(t, prepared); err != nil {
-		res.Fail(report.Diagnostic{Code: "REPO_ADD_WRITE_FAILED", Message: err.Error()})
-		return res, report.ExitExecution
-	}
-	res.Data = map[string]any{"added": prepared.repository, "actions": prepared.actions, "phase": prepared.state.Phase}
-	return res, report.ExitOK
-}
-
-func (s Service) prepareRepoAdd(ctx context.Context, t domain.Task, o RepoAddOptions) (repoAddPlan, *report.Diagnostic, report.ExitCode) {
-	empty := repoAddPlan{}
-	if o.Repository == "" {
-		return empty, &report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "a --repo is required"}, report.ExitConfig
-	}
-	parts := strings.SplitN(o.Repository, "=", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return empty, &report.Diagnostic{Code: "INVALID_REPOSITORY", Message: "--repo must use name=path"}, report.ExitConfig
-	}
-	name, rawPath := parts[0], parts[1]
-	existing := map[string]bool{}
-	for _, r := range t.Repositories {
-		existing[r.Name] = true
-	}
-	if existing[name] {
-		return empty, &report.Diagnostic{Code: "REPOSITORY_EXISTS", Repo: name, Message: "repository " + name + " already exists in the task"}, report.ExitConfig
-	}
-	for _, dep := range o.DependsOn {
-		if dep == name {
-			return empty, &report.Diagnostic{Code: "UNKNOWN_DEPENDENCY", Repo: name, Message: "repository cannot depend on itself"}, report.ExitConfig
-		}
-		if !existing[dep] {
-			return empty, &report.Diagnostic{Code: "UNKNOWN_DEPENDENCY", Repo: name, Message: "depends on unknown repository " + dep}, report.ExitConfig
-		}
-	}
-	source, err := fsx.CanonicalExisting(rawPath)
-	if err != nil {
-		return empty, &report.Diagnostic{Code: "REPOSITORY_NOT_FOUND", Repo: name, Message: err.Error()}, report.ExitConfig
-	}
-	_, err = s.Git.Inspect(ctx, source)
-	if err != nil {
-		return empty, &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: name, Message: err.Error()}, report.ExitEnvironment
-	}
-	repository := domain.Repository{
-		Name:      name,
-		Source:    source,
-		Base:      "HEAD",
-		Branch:    "feature/" + strings.ToLower(t.Task.ID),
-		Worktree:  filepath.Join("worktrees", name),
-		DependsOn: append([]string(nil), o.DependsOn...),
-	}
-	merged := t
-	repositories := make([]domain.Repository, 0, len(t.Repositories)+1)
-	repositories = append(repositories, t.Repositories...)
-	repositories = append(repositories, repository)
-	merged.Repositories = repositories
-	if err = config.Validate(&merged); err != nil {
-		return empty, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
-	}
-	for i := range merged.Repositories {
-		if merged.Repositories[i].Name == name {
-			repository = merged.Repositories[i]
-			break
-		}
-	}
-	state, exists, err := loadStartState(t)
-	if err != nil {
-		return empty, &report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()}, report.ExitExecution
-	}
-	if !exists {
-		return empty, &report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: "state file is missing; reinitialize the task in an empty directory"}, report.ExitExecution
-	}
-	switch state.Phase {
-	case "initialized", "started", "failed":
-	default:
-		return empty, &report.Diagnostic{Code: "REPO_ADD_PHASE_UNSUPPORTED", Message: "repo add is only supported in initialized, started, or failed phase (current: " + state.Phase + ")"}, report.ExitConfig
-	}
-	digest, err := configDigest(merged)
-	if err != nil {
-		return empty, &report.Diagnostic{Code: "CONFIG_DIGEST_FAILED", Message: err.Error()}, report.ExitExecution
-	}
-	now := time.Now().UTC()
-	if state.Repositories == nil {
-		state.Repositories = map[string]domain.RepositoryState{}
-	}
-	value := state.Repositories[name]
-	value.Worktree = repository.Worktree
-	if value.Actions == nil {
-		value.Actions = map[string]domain.ActionOutcome{}
-	}
-	if !merged.Execution.Fetch {
-		value.Actions["fetch"] = skippedOutcome(now)
-	} else if value.Actions["fetch"].Status == "" {
-		value.Actions["fetch"] = pendingOutcome(now)
-	}
-	if value.Actions["worktree"].Status == "" {
-		value.Actions["worktree"] = pendingOutcome(now)
-	}
-	state.Repositories[name] = value
-	state.ConfigDigest = digest
-	state.UpdatedAt = now
-	items, err := plan.Build(merged)
-	if err != nil {
-		return empty, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
-	}
-	actions := []plan.Item{}
-	for _, item := range items {
-		if item.Repo == name {
-			actions = append(actions, item)
-		}
-	}
-	return repoAddPlan{repository: repository, merged: merged, state: state, digest: digest, actions: actions}, nil, report.ExitOK
-}
-
-type StartOptions struct {
-	DryRun  bool
-	Execute bool
-}
-
-func (s Service) Start(ctx context.Context, t domain.Task, o StartOptions) (report.Result, report.ExitCode) {
-	res := report.New("start", t.Task.ID)
-	items, err := plan.Build(t)
-	if err != nil {
-		res.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
-		return res, report.ExitConfig
-	}
-	res.Data = map[string]any{"dryRun": o.DryRun, "actions": items}
-	if !o.Execute {
-		return res, report.ExitOK
-	}
-	l, err := lock.Acquire(t.Task.Root)
-	if err != nil {
-		res.Fail(report.Diagnostic{Code: "TASK_LOCKED", Message: err.Error()})
-		return res, report.ExitConflict
-	}
-	defer l.Release()
-	ordered, _ := plan.Order(t.Repositories)
-	sourceLocks, diagnostic, code := s.acquireSourceLocks(ctx, ordered)
-	if diagnostic != nil {
-		res.Fail(*diagnostic)
-		return res, code
-	}
-	defer releaseSourceLocks(sourceLocks)
-	if diagnostic, code := s.preflightStart(ctx, t, ordered); diagnostic != nil {
-		res.Fail(*diagnostic)
-		return res, code
-	}
-	digest, err := configDigest(t)
-	if err != nil {
-		res.Fail(report.Diagnostic{Code: "CONFIG_DIGEST_FAILED", Message: err.Error()})
-		return res, report.ExitExecution
-	}
-	state, exists, err := loadStartState(t)
-	if err != nil {
-		res.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()})
-		return res, report.ExitExecution
-	}
-	if exists && state.ConfigDigest != "" && state.ConfigDigest != digest {
-		res.Fail(report.Diagnostic{Code: "STATE_CONFLICT", Message: "persisted start state belongs to a different task configuration"})
-		return res, report.ExitConflict
-	}
-	now := time.Now().UTC()
-	if !exists {
-		res.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: "state file is missing; reinitialize the task in an empty directory"})
-		return res, report.ExitExecution
-	}
-	state.SchemaVersion = domain.StateSchemaVersion
-	state.TaskID = t.Task.ID
-	state.ConfigDigest = digest
-	state.Phase = "starting"
-	state.UpdatedAt = now
-	if state.Repositories == nil {
-		state.Repositories = map[string]domain.RepositoryState{}
-	}
-	if info, statErr := os.Stat(filepath.Join(t.Task.Root, "worktrees")); statErr == nil && info.IsDir() {
-		state.Directory = completedOutcome()
-	} else {
-		state.Directory = pendingOutcome(now)
-	}
-	for _, repository := range t.Repositories {
-		value := state.Repositories[repository.Name]
-		if value.Actions == nil {
-			value.Actions = map[string]domain.ActionOutcome{}
-		}
-		value.Worktree = repository.Worktree
-		if !t.Execution.Fetch {
-			value.Actions["fetch"] = skippedOutcome(now)
-		} else if value.Actions["fetch"].Status == "" {
-			value.Actions["fetch"] = pendingOutcome(now)
-		}
-		if value.Actions["worktree"].Status == "" {
-			value.Actions["worktree"] = pendingOutcome(now)
-		}
-		state.Repositories[repository.Name] = value
-	}
-	if err := persistState(t, state); err != nil {
-		res.Fail(report.Diagnostic{Code: "STATE_WRITE_FAILED", Message: err.Error()})
-		return res, report.ExitExecution
-	}
-	if state.Directory.Status != domain.ActionCompleted {
-		if err = os.MkdirAll(filepath.Join(t.Task.Root, "worktrees"), 0755); err != nil {
-			return startActionFailure(res, &state, t, "", "directory", err)
-		}
-		state.Directory = completedOutcome()
-		if err = persistState(t, state); err != nil {
-			return startActionFailure(res, &state, t, "", "directory", err)
-		}
-	}
-	for _, repository := range ordered {
-		value := state.Repositories[repository.Name]
-		if t.Execution.Fetch && (value.Actions["fetch"].Status != domain.ActionCompleted || !s.Git.HasRef(ctx, repository.Source, repository.Base)) {
-			remote := fetchRemote(repository.Base)
-			if !s.Git.RemoteExists(ctx, repository.Source, remote) && remote != "origin" && s.Git.RemoteExists(ctx, repository.Source, "origin") {
-				remote = "origin"
-			}
-			if err = s.Git.Fetch(ctx, repository.Source, remote); err != nil {
-				return startActionFailure(res, &state, t, repository.Name, "fetch", err)
-			}
-			if !s.Git.HasRef(ctx, repository.Source, repository.Base) {
-				return startActionFailure(res, &state, t, repository.Name, "fetch", fmt.Errorf("base ref %s does not exist after fetch", repository.Base))
-			}
-			setAction(&state, repository.Name, "fetch", completedOutcome())
-			if err = persistState(t, state); err != nil {
-				return startActionFailure(res, &state, t, repository.Name, "fetch", err)
-			}
-		}
-		target := filepath.Join(t.Task.Root, repository.Worktree)
-		worktrees, worktreeErr := s.Git.Worktrees(ctx, repository.Source)
-		if worktreeErr != nil {
-			return startActionFailure(res, &state, t, repository.Name, "worktree", worktreeErr)
-		}
-		matched := false
-		for _, worktree := range worktrees {
-			if samePath(worktree.Path, target) && worktree.Branch == repository.Branch {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, target, repository.Base); err != nil {
-				return startActionFailure(res, &state, t, repository.Name, "worktree", err)
-			}
-		}
-		if state.Repositories[repository.Name].Actions["worktree"].Status != domain.ActionCompleted || matched {
-			setAction(&state, repository.Name, "worktree", completedOutcome())
-			if err = persistState(t, state); err != nil {
-				return startActionFailure(res, &state, t, repository.Name, "worktree", err)
-			}
-		}
-	}
-	state.Phase = "started"
-	state.UpdatedAt = time.Now().UTC()
-	if err = persistState(t, state); err != nil {
-		res.Fail(report.Diagnostic{Code: "STATE_WRITE_FAILED", Message: err.Error()})
-		return res, report.ExitExecution
-	}
-	res.Data = map[string]any{"dryRun": false, "actions": items, "phase": "started"}
-	return res, report.ExitOK
-}
-
-func (s Service) preflightStart(ctx context.Context, task domain.Task, ordered []domain.Repository) (*report.Diagnostic, report.ExitCode) {
-	for _, repository := range ordered {
+	for index, repository := range task.Repositories {
 		sourceInfo, err := s.Git.Inspect(ctx, repository.Source)
-		if err != nil {
-			return &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
+		if err != nil || sourceInfo.CommonDir == "" {
+			return nil, &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: gitErrorMessage("inspect configured source", err)}, report.ExitEnvironment
 		}
-		if !s.Git.HasRef(ctx, repository.Source, repository.Base) && !task.Execution.Fetch {
-			return &report.Diagnostic{Code: "BASE_REF_NOT_FOUND", Repo: repository.Name, Message: "base ref " + repository.Base + " does not exist"}, report.ExitEnvironment
+		if !s.Git.HasRef(ctx, repository.Source, repository.Base) {
+			return nil, &report.Diagnostic{Code: "BASE_REF_NOT_FOUND", Repo: repository.Name, Message: "base ref " + repository.Base + " does not exist locally"}, report.ExitEnvironment
 		}
-		if task.Execution.Fetch {
-			remote := fetchRemote(repository.Base)
-			if !s.Git.RemoteExists(ctx, repository.Source, remote) && !(remote != "origin" && s.Git.RemoteExists(ctx, repository.Source, "origin")) {
-				return &report.Diagnostic{Code: "FETCH_REMOTE_NOT_FOUND", Repo: repository.Name, Message: "fetch remote " + remote + " does not exist"}, report.ExitEnvironment
-			}
-		}
-		target := filepath.Join(task.Task.Root, repository.Worktree)
 		worktrees, err := s.Git.Worktrees(ctx, repository.Source)
 		if err != nil {
-			return &report.Diagnostic{Code: "WORKTREE_INSPECTION_FAILED", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
+			return nil, &report.Diagnostic{Code: "WORKTREE_INSPECTION_FAILED", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
 		}
+		target := filepath.Join(task.Task.Root, repository.Worktree)
 		matched := false
 		for _, worktree := range worktrees {
 			if worktree.Branch == repository.Branch && !samePath(worktree.Path, target) {
-				return &report.Diagnostic{Code: "BRANCH_OCCUPIED", Repo: repository.Name, Message: fmt.Sprintf("branch %s is already checked out at %s", repository.Branch, worktree.Path)}, report.ExitConflict
+				return nil, &report.Diagnostic{Code: "BRANCH_OCCUPIED", Repo: repository.Name, Message: fmt.Sprintf("branch %s is already checked out at %s", repository.Branch, worktree.Path)}, report.ExitConflict
 			}
 			if !samePath(worktree.Path, target) {
 				continue
 			}
 			if worktree.Branch != repository.Branch {
-				return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s has branch %s, expected %s", target, worktree.Branch, repository.Branch)}, report.ExitConflict
+				return nil, &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s has branch %s, expected %s", target, worktree.Branch, repository.Branch)}, report.ExitConflict
 			}
 			targetInfo, inspectErr := s.Git.Inspect(ctx, target)
-			if inspectErr != nil || sourceInfo.CommonDir == "" || targetInfo.CommonDir != sourceInfo.CommonDir {
-				return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s does not belong to the configured source", target)}, report.ExitConflict
+			if inspectErr != nil || !samePath(targetInfo.CommonDir, sourceInfo.CommonDir) {
+				return nil, &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s does not belong to the configured source", target)}, report.ExitConflict
 			}
 			matched = true
 		}
 		if !matched {
 			if _, err = os.Stat(target); err == nil {
-				return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s exists but is not the configured worktree", target)}, report.ExitConflict
+				return nil, &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s exists but is not the configured worktree", target)}, report.ExitConflict
+			} else if !os.IsNotExist(err) {
+				return nil, &report.Diagnostic{Code: "WORKTREE_INSPECTION_FAILED", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
 			}
-			if !os.IsNotExist(err) {
-				return &report.Diagnostic{Code: "WORKTREE_TARGET_UNREADABLE", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
-			}
+			items[index].Status = "create"
+			items[index].Description = fmt.Sprintf("CREATE %s -> %s", repository.Name, repository.Worktree)
+		} else {
+			items[index].Status = "reuse"
+			items[index].Description = fmt.Sprintf("REUSE %s -> %s", repository.Name, repository.Worktree)
 		}
 	}
-	return nil, report.ExitOK
+	return items, nil, report.ExitOK
 }
 
 type sourceLockCandidate struct {
@@ -512,17 +338,11 @@ func (s Service) acquireSourceLocks(ctx context.Context, repositories []domain.R
 	byKey := map[string]sourceLockCandidate{}
 	for _, repository := range repositories {
 		info, err := s.Git.Inspect(ctx, repository.Source)
-		if err != nil {
-			return nil, &report.Diagnostic{Code: "SOURCE_LOCK_UNAVAILABLE", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
-		}
-		if info.CommonDir == "" {
-			return nil, &report.Diagnostic{Code: "SOURCE_LOCK_UNAVAILABLE", Repo: repository.Name, Message: "Git common directory is unavailable"}, report.ExitEnvironment
+		if err != nil || info.CommonDir == "" {
+			return nil, &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: gitErrorMessage("inspect configured source", err)}, report.ExitEnvironment
 		}
 		candidate := sourceLockCandidate{CommonDir: info.CommonDir, Branch: repository.Branch, Repo: repository.Name}
-		key := candidate.CommonDir + "\x00" + candidate.Branch
-		if _, exists := byKey[key]; !exists {
-			byKey[key] = candidate
-		}
+		byKey[info.CommonDir+"\x00"+repository.Branch] = candidate
 	}
 	candidates := make([]sourceLockCandidate, 0, len(byKey))
 	for _, candidate := range byKey {
@@ -556,164 +376,26 @@ func releaseSourceLocks(locks []*lock.Lock) {
 	}
 }
 
-func pendingOutcome(now time.Time) domain.ActionOutcome {
-	return domain.ActionOutcome{Status: domain.ActionPending, UpdatedAt: now}
-}
-func skippedOutcome(now time.Time) domain.ActionOutcome {
-	return domain.ActionOutcome{Status: domain.ActionSkipped, UpdatedAt: now}
-}
-func completedOutcome() domain.ActionOutcome {
-	return domain.ActionOutcome{Status: domain.ActionCompleted, UpdatedAt: time.Now().UTC()}
-}
-func setAction(state *domain.State, repository, action string, outcome domain.ActionOutcome) {
-	value := state.Repositories[repository]
-	if value.Actions == nil {
-		value.Actions = map[string]domain.ActionOutcome{}
+func gitErrorMessage(prefix string, err error) string {
+	if err == nil {
+		return prefix
 	}
-	value.Actions[action] = outcome
-	value.Error = ""
-	state.Repositories[repository] = value
-	state.UpdatedAt = time.Now().UTC()
-}
-func startActionFailure(res report.Result, state *domain.State, task domain.Task, repository, action string, err error) (report.Result, report.ExitCode) {
-	state.Phase = "failed"
-	state.UpdatedAt = time.Now().UTC()
-	if repository == "" {
-		state.Directory = domain.ActionOutcome{Status: domain.ActionFailed, UpdatedAt: state.UpdatedAt, Error: err.Error()}
-	} else {
-		value := state.Repositories[repository]
-		if value.Actions == nil {
-			value.Actions = map[string]domain.ActionOutcome{}
-		}
-		value.Actions[action] = domain.ActionOutcome{Status: domain.ActionFailed, UpdatedAt: state.UpdatedAt, Error: err.Error()}
-		value.Error = err.Error()
-		state.Repositories[repository] = value
-	}
-	_ = persistState(task, *state)
-	res.Fail(report.Diagnostic{Code: "START_FAILED", Repo: repository, Message: err.Error()})
-	return res, report.ExitPartial
-}
-func persistState(t domain.Task, s domain.State) error {
-	b, e := json.MarshalIndent(s, "", "  ")
-	if e != nil {
-		return e
-	}
-	return fsx.AtomicWrite(filepath.Join(t.Task.Root, ".taskflow", "state.json"), append(b, '\n'), 0644)
+	return fmt.Sprintf("%s: %v", prefix, err)
 }
 
-func loadStartState(t domain.Task) (domain.State, bool, error) {
-	raw, err := os.ReadFile(filepath.Join(t.Task.Root, ".taskflow", "state.json"))
-	if os.IsNotExist(err) {
-		return domain.State{}, false, nil
-	}
-	if err != nil {
-		return domain.State{}, true, err
-	}
-	var state domain.State
-	if err = json.Unmarshal(raw, &state); err != nil {
-		return domain.State{}, true, fmt.Errorf("decode state: %w", err)
-	}
-	if state.SchemaVersion != domain.StateSchemaVersion || state.TaskID != t.Task.ID {
-		return domain.State{}, true, fmt.Errorf("state schema or task ID is incompatible; reinitialize the task in an empty directory")
-	}
-	return state, true, nil
-}
 func samePath(a, b string) bool {
-	aa, e := filepath.Abs(a)
-	if e != nil {
+	aa, err := filepath.Abs(a)
+	if err != nil {
 		return false
 	}
-	bb, e := filepath.Abs(b)
-	return e == nil && aa == bb
-}
-
-type taskFileSnapshot struct {
-	path    string
-	data    []byte
-	existed bool
-}
-
-func snapshotTaskFile(path string) (taskFileSnapshot, error) {
-	data, err := os.ReadFile(path)
-	if err == nil {
-		return taskFileSnapshot{path: path, data: data, existed: true}, nil
-	}
-	if os.IsNotExist(err) {
-		return taskFileSnapshot{path: path, existed: false}, nil
-	}
-	return taskFileSnapshot{}, err
-}
-
-func (s taskFileSnapshot) restore() error {
-	if !s.existed {
-		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	return fsx.AtomicWrite(s.path, s.data, 0644)
-}
-
-func restoreTaskFiles(snapshots ...taskFileSnapshot) {
-	for index := len(snapshots) - 1; index >= 0; index-- {
-		_ = snapshots[index].restore()
-	}
-}
-
-func writeRepoAdd(t domain.Task, p repoAddPlan) error {
-	configPath := filepath.Join(t.Task.Root, "taskflow.yaml")
-	statePath := filepath.Join(t.Task.Root, ".taskflow", "state.json")
-	configSnap, err := snapshotTaskFile(configPath)
-	if err != nil {
-		return err
-	}
-	stateSnap, err := snapshotTaskFile(statePath)
-	if err != nil {
-		return err
-	}
-	configBytes, err := config.Marshal(p.merged)
-	if err != nil {
-		return err
-	}
-	stateBytes, err := json.MarshalIndent(p.state, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err = fsx.AtomicWrite(configPath, configBytes, 0644); err != nil {
-		restoreTaskFiles(configSnap, stateSnap)
-		return err
-	}
-	if err = fsx.AtomicWrite(statePath, append(stateBytes, '\n'), 0644); err != nil {
-		restoreTaskFiles(configSnap, stateSnap)
-		return err
-	}
-	return nil
-}
-
-func fetchRemote(base string) string {
-	if first, _, ok := strings.Cut(base, "/"); ok && first != "" {
-		return first
-	}
-	return "origin"
+	bb, err := filepath.Abs(b)
+	return err == nil && filepath.Clean(aa) == filepath.Clean(bb)
 }
 
 func (s Service) Open(ctx context.Context, t domain.Task, tool string, extraArgs []string, stdin io.Reader, stdout, stderr io.Writer) (report.Result, report.ExitCode) {
 	r := report.New("open", t.Task.ID)
 	if tool == "" {
 		tool = "codex"
-	}
-	state, exists, err := loadStartState(t)
-	if err != nil {
-		r.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: err.Error()})
-		return r, report.ExitExecution
-	}
-	if !exists || state.Phase != "started" {
-		phase := "missing"
-		if exists {
-			phase = state.Phase
-		}
-		r.Fail(report.Diagnostic{Code: "WORKSPACE_NOT_STARTED", Message: "task workspace phase is " + phase + "; run start --execute first"})
-		return r, report.ExitConfig
 	}
 	if diagnostic, code := s.preflightOpen(ctx, t); diagnostic != nil {
 		r.Fail(*diagnostic)
@@ -730,10 +412,10 @@ func (s Service) Open(ctx context.Context, t domain.Task, tool string, extraArgs
 		return r, report.ExitEnvironment
 	}
 	spec.Executable = resolved
-	res, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: spec.Executable, Args: spec.Args, Dir: spec.Dir, Stdin: stdin, Stdout: stdout, Stderr: stderr, Env: spec.Env})
+	child, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: spec.Executable, Args: spec.Args, Dir: spec.Dir, Stdin: stdin, Stdout: stdout, Stderr: stderr, Env: spec.Env})
 	if err != nil {
-		r.Data = map[string]any{"tool": tool, "executable": spec.Executable, "childExitCode": res.ExitCode}
-		r.Fail(report.Diagnostic{Code: "TOOL_EXITED", Message: fmt.Sprintf("%s exited with code %d", tool, res.ExitCode)})
+		r.Data = map[string]any{"tool": tool, "executable": spec.Executable, "childExitCode": child.ExitCode}
+		r.Fail(report.Diagnostic{Code: "TOOL_EXITED", Message: fmt.Sprintf("%s exited with code %d", tool, child.ExitCode)})
 		return r, report.ExitExecution
 	}
 	r.Data = spec
@@ -744,152 +426,16 @@ func (s Service) preflightOpen(ctx context.Context, task domain.Task) (*report.D
 	for _, repository := range task.Repositories {
 		sourceInfo, err := s.Git.Inspect(ctx, repository.Source)
 		if err != nil || sourceInfo.CommonDir == "" {
-			return &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: fmt.Sprintf("inspect configured source: %v", err)}, report.ExitEnvironment
+			return &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: gitErrorMessage("inspect configured source", err)}, report.ExitEnvironment
 		}
 		target := filepath.Join(task.Task.Root, repository.Worktree)
 		targetInfo, err := s.Git.Inspect(ctx, target)
 		if err != nil {
 			return &report.Diagnostic{Code: "WORKTREE_INVALID", Repo: repository.Name, Message: err.Error()}, report.ExitConflict
 		}
-		if targetInfo.CommonDir != sourceInfo.CommonDir || targetInfo.Branch != repository.Branch {
-			return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("worktree %s does not match source and branch %s", target, repository.Branch)}, report.ExitConflict
+		if !samePath(targetInfo.CommonDir, sourceInfo.CommonDir) || targetInfo.Branch != repository.Branch {
+			return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("worktree %s does not match source %s and branch %s", target, sourceInfo.CommonDir, repository.Branch)}, report.ExitConflict
 		}
 	}
 	return nil, report.ExitOK
-}
-func (s Service) Status(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
-	r := report.New("status", t.Task.ID)
-	data := domain.StatusData{Phase: "unknown", Repositories: []domain.RepositoryStatus{}}
-	if b, e := os.ReadFile(filepath.Join(t.Task.Root, ".taskflow", "state.json")); e == nil {
-		var st domain.State
-		if json.Unmarshal(b, &st) == nil {
-			data.Phase = st.Phase
-		}
-	}
-	validation, _ := loadValidationReport(t)
-	digest, _ := configDigest(t)
-	stale := validation != nil && validation.ConfigDigest != digest
-	data.ValidationConfigStale = stale
-	data.LastValidation = validation
-	for _, repository := range t.Repositories {
-		worktree := filepath.Join(t.Task.Root, repository.Worktree)
-		info, e := s.Git.Inspect(ctx, worktree)
-		entry := domain.RepositoryStatus{Name: repository.Name, Worktree: worktree}
-		if e != nil {
-			entry.Error = e.Error()
-		} else {
-			entry.Branch, entry.Head, entry.Dirty, entry.DirtyFiles = info.Branch, info.Head, info.Dirty, info.DirtyFiles
-			entry.Upstream, entry.Ahead, entry.Behind = info.Upstream, info.Ahead, info.Behind
-		}
-		data.Repositories = append(data.Repositories, entry)
-	}
-	r.Data = data
-	return r, report.ExitOK
-}
-func (s Service) Validate(ctx context.Context, t domain.Task) (report.Result, report.ExitCode) {
-	return s.validate(ctx, t, "")
-}
-func (s Service) ValidateScoped(ctx context.Context, t domain.Task, only string) (report.Result, report.ExitCode) {
-	return s.validate(ctx, t, only)
-}
-func (s Service) validate(ctx context.Context, t domain.Task, only string) (report.Result, report.ExitCode) {
-	r := report.New("validate", t.Task.ID)
-	_, exists, stateErr := loadStartState(t)
-	if stateErr != nil {
-		r.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: stateErr.Error()})
-		return r, report.ExitExecution
-	}
-	if !exists {
-		r.Fail(report.Diagnostic{Code: "STATE_INCOMPATIBLE", Message: "state file is missing; reinitialize the task in an empty directory"})
-		return r, report.ExitExecution
-	}
-	ordered, err := plan.Order(t.Repositories)
-	if err != nil {
-		r.Fail(report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()})
-		return r, report.ExitConfig
-	}
-	if only != "" {
-		ordered, err = plan.DependencyClosure(t.Repositories, only)
-		if err != nil {
-			r.Fail(report.Diagnostic{Code: "UNKNOWN_REPOSITORY", Repo: only, Message: err.Error()})
-			return r, report.ExitConfig
-		}
-	}
-	digest, err := configDigest(t)
-	if err != nil {
-		r.Fail(report.Diagnostic{Code: "CONFIG_DIGEST_FAILED", Message: err.Error()})
-		return r, report.ExitExecution
-	}
-	validation := domain.ValidationReport{SchemaVersion: domain.ValidationSchemaVersion, TaskID: t.Task.ID, ConfigDigest: digest, CompletedAt: time.Now().UTC(), OK: true, Repositories: map[string]domain.RepositoryValidation{}}
-	for _, repository := range ordered {
-		validation.Scope = append(validation.Scope, repository.Name)
-		worktree := filepath.Join(t.Task.Root, repository.Worktree)
-		repositoryValidation := domain.RepositoryValidation{Name: repository.Name, Checks: []domain.CheckResult{}, OK: true}
-		info, inspectErr := s.Git.Inspect(ctx, worktree)
-		if inspectErr != nil {
-			r.Fail(report.Diagnostic{Code: "WORKTREE_INVALID", Repo: repository.Name, Message: inspectErr.Error()})
-			repositoryValidation.OK = false
-		} else {
-			repositoryValidation.Head = info.Head
-		}
-		for _, check := range repository.Checks {
-			timeout, _ := time.ParseDuration(check.Timeout)
-			commandResult, checkErr := s.Runner.Run(ctx, execx.CommandSpec{Executable: check.Executable, Args: check.Args, Dir: worktree, Timeout: timeout})
-			checkResult := domain.CheckResult{Name: check.Name, Executable: check.Executable, OK: checkErr == nil, ExitCode: commandResult.ExitCode, TimedOut: commandResult.TimedOut, Stderr: commandResult.Stderr}
-			repositoryValidation.Checks = append(repositoryValidation.Checks, checkResult)
-			if checkErr != nil {
-				code := "CHECK_FAILED"
-				if commandResult.TimedOut {
-					code = "CHECK_TIMEOUT"
-				}
-				r.Fail(report.Diagnostic{Code: code, Repo: repository.Name, Message: fmt.Sprintf("%s failed: %s", check.Name, commandResult.Stderr)})
-				repositoryValidation.OK = false
-			}
-		}
-		validation.Repositories[repository.Name] = repositoryValidation
-		validation.OK = validation.OK && repositoryValidation.OK
-	}
-	validation.CompletedAt = time.Now().UTC()
-	r.Data = validation
-	if err = persistValidationReport(t, validation); err != nil {
-		r.Fail(report.Diagnostic{Code: "VALIDATION_REPORT_WRITE_FAILED", Message: err.Error()})
-		return r, report.ExitExecution
-	}
-	if !validation.OK {
-		return r, report.ExitValidation
-	}
-	return r, report.ExitOK
-}
-func configDigest(task domain.Task) (string, error) {
-	raw, err := config.Marshal(task)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(raw)
-	return fmt.Sprintf("%x", digest), nil
-}
-
-func validationReportPath(task domain.Task) string {
-	return filepath.Join(task.Task.Root, ".taskflow", "reports", "validation.json")
-}
-func persistValidationReport(task domain.Task, validation domain.ValidationReport) error {
-	raw, err := json.MarshalIndent(validation, "", "  ")
-	if err != nil {
-		return err
-	}
-	return fsx.AtomicWrite(validationReportPath(task), append(raw, '\n'), 0644)
-}
-func loadValidationReport(task domain.Task) (*domain.ValidationReport, error) {
-	raw, err := os.ReadFile(validationReportPath(task))
-	if err != nil {
-		return nil, err
-	}
-	var validation domain.ValidationReport
-	if err = json.Unmarshal(raw, &validation); err != nil {
-		return nil, err
-	}
-	if validation.SchemaVersion != domain.ValidationSchemaVersion || validation.TaskID != task.Task.ID || validation.Repositories == nil {
-		return nil, fmt.Errorf("validation report is incompatible")
-	}
-	return &validation, nil
 }

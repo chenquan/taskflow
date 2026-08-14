@@ -1,26 +1,10 @@
 ## Purpose
 
-Define operational rendering, ordered checks, readiness blockers, and early validation.
-
+Define current operational results for create and open without validation history or readiness conclusions.
 ## Requirements
+### Requirement: Report create and open operational results
+Create and open SHALL expose their current action, conflict, and launch results through the common text and JSON output contract without validation or readiness history.
 
-### Requirement: Render operational data in text mode
-Text command output MUST render calculated result data in addition to success, warnings, and errors.
-
-#### Scenario: Dry-run plan in text mode
-- **WHEN** a user runs start dry-run without JSON
-- **THEN** the output includes all planned actions
-
-### Requirement: Validate in dependency order
-Validation MUST run repository checks in topological dependency order.
-
-#### Scenario: Dependent listed first
-- **WHEN** YAML lists a dependent repository before its dependency
-- **THEN** validation executes the dependency check first
-
-### Requirement: Reject invalid check configuration
-Configuration validation MUST reject non-empty invalid check timeout values.
-
-#### Scenario: Invalid check timeout
-- **WHEN** a repository check timeout is not a valid duration
-- **THEN** configuration validation fails before start
+#### Scenario: Report a create action
+- **WHEN** create previews or executes a repository reconciliation
+- **THEN** output includes the repository and its create, reuse, or failure result

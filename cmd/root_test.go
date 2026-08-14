@@ -30,6 +30,7 @@ func TestTasksRootDefaultsToCurrentDirectory(t *testing.T) {
 		{"init", repo},
 		{"-C", repo, "config", "user.email", "test@example.com"},
 		{"-C", repo, "config", "user.name", "Test"},
+		{"-C", repo, "commit", "--allow-empty", "-m", "init"},
 	} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
@@ -38,7 +39,7 @@ func TestTasksRootDefaultsToCurrentDirectory(t *testing.T) {
 
 	root := NewRootCommand()
 	root.SetOut(os.Stdout)
-	root.SetArgs([]string{"init", "TASK-1", "--repo", "repo=" + repo})
+	root.SetArgs([]string{"create", "TASK-1", "--repo", "repo=" + repo, "--execute"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -47,30 +48,20 @@ func TestTasksRootDefaultsToCurrentDirectory(t *testing.T) {
 	}
 }
 
-func TestSkillScope(t *testing.T) {
-	if skillScope(true) != "project" || skillScope(false) != "global" {
-		t.Fatal("unexpected skill scope")
-	}
-}
-
-func TestCommandsReportRemovedConfiguration(t *testing.T) {
-	tasks := t.TempDir()
-	rootPath := filepath.Join(tasks, "LEGACY")
-	if err := os.MkdirAll(rootPath, 0755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(rootPath, "taskflow.yaml")
-	raw := []byte("task:\n  id: LEGACY\nrepositories: []\ndevelopment:\n  default_tool: codex\n")
-	if err := os.WriteFile(path, raw, 0644); err != nil {
-		t.Fatal(err)
-	}
-
+func TestPublicCommandsAreLimitedToCreateOpenAndVersion(t *testing.T) {
 	root := NewRootCommand()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetArgs([]string{"--json", "--tasks-root", tasks, "status", "LEGACY"})
-	err := root.Execute()
-	if exit, ok := err.(*exitError); !ok || exit.code != 2 || !strings.Contains(out.String(), "INVALID_CONFIGURATION") {
-		t.Fatalf("err=%v output=%s", err, out.String())
+	seen := map[string]bool{}
+	for _, command := range root.Commands() {
+		seen[command.Name()] = true
+	}
+	for _, name := range []string{"create", "open", "version"} {
+		if !seen[name] {
+			t.Fatalf("missing public command %s", name)
+		}
+	}
+	for _, name := range []string{"init", "start", "status", "validate", "repo", "skill"} {
+		if seen[name] {
+			t.Fatalf("retired command still registered: %s", name)
+		}
 	}
 }

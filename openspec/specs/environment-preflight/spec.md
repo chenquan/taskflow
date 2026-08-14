@@ -1,12 +1,10 @@
 ## Purpose
 
-Define execute-mode source, fetch, branch, and managed-worktree preflight checks before Taskflow mutations begin.
-
+Define create-mode source, local-base, branch, and managed-worktree preflight checks before Taskflow mutations begin.
 ## Requirements
+### Requirement: Preflight create reconciliation
+Create MUST inspect every configured source, base ref, branch occupancy, target path, and worktree identity before taskflow.yaml or Git mutation.
 
-### Requirement: Preflight execute-mode repository readiness
-Execute-mode `start` MUST inspect each configured source repository, worktree target, branch occupancy, and dependency graph before making filesystem or Git mutations. It MUST require a locally resolvable base reference when fetch is disabled, or a usable fetch remote when fetch is enabled.
-
-#### Scenario: Report a missing base reference
-- **WHEN** a configured repository base reference cannot be found locally and fetch is disabled
-- **THEN** start reports a `BASE_REF_NOT_FOUND` diagnostic before mutation
+#### Scenario: Preflight all repositories
+- **WHEN** any configured repository is not ready
+- **THEN** create returns a repository diagnostic before changing configuration or Git state
