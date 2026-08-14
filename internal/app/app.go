@@ -189,6 +189,10 @@ func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOp
 		if err != nil {
 			return createResolution{}, &report.Diagnostic{Code: "INVALID_REPOSITORY", Message: err.Error()}, report.ExitConfig
 		}
+		repository.Base, err = s.Git.DefaultBase(ctx, repository.Source)
+		if err != nil {
+			return createResolution{}, &report.Diagnostic{Code: "REMOTE_DEFAULT_UNAVAILABLE", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
+		}
 		if existing[repository.Name] {
 			return createResolution{}, &report.Diagnostic{Code: "REPOSITORY_EXISTS", Repo: repository.Name, Message: "repository already exists in the task"}, report.ExitConfig
 		}

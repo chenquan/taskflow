@@ -35,6 +35,8 @@ taskflow --json --tasks-root <tasks-root> create <task-id> \
 
 执行会先检查所有 source、base ref、branch 占用、target path 和 worktree identity，再写 taskflow.yaml 或运行 `git worktree add`。它不会删除、移动、reset 或覆盖现有路径。
 
+新声明的仓库默认从 source 的 `origin/HEAD` 解析本地远程默认分支作为 base，并使用 `feature/<task-id>` 作为分支；Taskflow 不会隐式 fetch。若 `origin/HEAD` 缺失或目标引用不可用，先在 source 仓库修复远程引用后再重试。已有 taskflow.yaml 中明确配置的 `base` 和 `branch` 不会被覆盖。
+
 已有任务可以直接重试：
 
 ```bash

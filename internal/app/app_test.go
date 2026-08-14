@@ -51,6 +51,46 @@ func TestCreateDryRunDoesNotWrite(t *testing.T) {
 	}
 }
 
+func TestCreateRequiresRemoteDefaultBase(t *testing.T) {
+	repo := makeGitRepo(t)
+	if out, err := exec.Command("git", "-C", repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("remove origin/HEAD: %v: %s", err, out)
+	}
+	result, code := New().Create(context.Background(), CreateOptions{
+		TasksRoot:    t.TempDir(),
+		TaskID:       "NO-REMOTE-DEFAULT",
+		Repositories: []string{"repo=" + repo},
+		DryRun:       true,
+	})
+	if code != report.ExitEnvironment || result.OK || !hasDiagnostic(result.Errors, "REMOTE_DEFAULT_UNAVAILABLE") {
+		t.Fatalf("expected remote default failure: code=%d result=%#v", code, result)
+	}
+}
+
+func TestCreateRejectsMalformedRepository(t *testing.T) {
+	result, code := New().Create(context.Background(), CreateOptions{
+		TasksRoot:    t.TempDir(),
+		TaskID:       "BAD-REPO",
+		Repositories: []string{"malformed"},
+		DryRun:       true,
+	})
+	if code != report.ExitConfig || result.OK || !hasDiagnostic(result.Errors, "INVALID_REPOSITORY") {
+		t.Fatalf("expected malformed repository failure: code=%d result=%#v", code, result)
+	}
+}
+
+func TestCreateRejectsConflictingModes(t *testing.T) {
+	result, code := New().Create(context.Background(), CreateOptions{
+		TasksRoot: t.TempDir(),
+		TaskID:    "CONFLICTING-MODES",
+		DryRun:    true,
+		Execute:   true,
+	})
+	if code != report.ExitConfig || result.OK || !hasDiagnostic(result.Errors, "INVALID_ARGUMENT") {
+		t.Fatalf("expected conflicting mode failure: code=%d result=%#v", code, result)
+	}
+}
+
 func TestCreateIsIdempotentAndDoesNotPersistState(t *testing.T) {
 	repo := makeGitRepo(t)
 	tasks := t.TempDir()

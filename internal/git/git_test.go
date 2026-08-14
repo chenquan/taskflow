@@ -75,6 +75,18 @@ func TestClientDefaultBaseResolvesOriginHead(t *testing.T) {
 	if err != nil || base != "origin/trunk" {
 		t.Fatalf("base=%q err=%v", base, err)
 	}
+	if out, err := exec.Command("git", "-C", root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("set invalid origin/HEAD: %v: %s", err, out)
+	}
+	if _, err := client.DefaultBase(context.Background(), root); err == nil {
+		t.Fatal("expected invalid origin/HEAD error")
+	}
+	if out, err := exec.Command("git", "-C", root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/missing").CombinedOutput(); err != nil {
+		t.Fatalf("set unavailable origin/HEAD: %v: %s", err, out)
+	}
+	if _, err := client.DefaultBase(context.Background(), root); err == nil {
+		t.Fatal("expected unavailable remote default error")
+	}
 	if out, err := exec.Command("git", "-C", root, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").CombinedOutput(); err != nil {
 		t.Fatalf("remove origin/HEAD: %v: %s", err, out)
 	}
