@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestLifecycleRunsWithoutOpenSpec(t *testing.T) {
+func TestCreateFlowRunsWithoutOpenSpec(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
 	for _, args := range [][]string{{"init", "-b", "main", repo}, {"-C", repo, "config", "user.email", "test@example.com"}, {"-C", repo, "config", "user.name", "Test"}, {"-C", repo, "commit", "--allow-empty", "-m", "init"}, {"-C", repo, "remote", "add", "origin", "https://example.test/repo.git"}, {"-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"}, {"-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"}} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
@@ -29,15 +29,19 @@ func TestLifecycleRunsWithoutOpenSpec(t *testing.T) {
 		}
 		return output.String()
 	}
-	run("init", "task", "--repo", "repo="+repo)
-	raw, err := os.ReadFile(filepath.Join(tasks, "task", "taskflow.yaml"))
-	if err != nil || strings.Contains(string(raw), "openspec") {
-		t.Fatalf("OpenSpec leaked into task configuration: %s (%v)", raw, err)
+	preview := run("create", "task", "--repo", "repo="+repo, "--dry-run")
+	if !strings.Contains(preview, "CREATE") {
+		t.Fatalf("dry-run did not report create action: %s", preview)
 	}
-	run("start", "task", "--execute")
-	status := run("--json", "status", "task")
-	if strings.Contains(status, "openSpec") || !strings.Contains(status, "feature/task") {
-		t.Fatalf("unexpected status: %s", status)
+	if _, err := os.Stat(filepath.Join(tasks, "task", "taskflow.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run wrote configuration: %v", err)
 	}
-	run("validate", "task")
+	run("create", "task", "--repo", "repo="+repo, "--execute")
+	if _, err := os.Stat(filepath.Join(tasks, "task", "worktrees", "repo")); err != nil {
+		t.Fatalf("worktree missing: %v", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(tasks, "task", "taskflow.yaml")); err != nil || strings.Contains(string(raw), "openspec") {
+		t.Fatalf("unexpected configuration: %s (%v)", raw, err)
+	}
+	run("create", "task", "--execute")
 }

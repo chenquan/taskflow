@@ -5,43 +5,42 @@ import (
 	"testing"
 )
 
-func TestTaskflowSkillGuidesTheUserThroughTheLifecycle(t *testing.T) {
+func TestTaskflowSkillGuidesCreateAndOpen(t *testing.T) {
 	content, err := Files.ReadFile("taskflow/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	text := string(content)
 	for _, required := range []string{
-		"status <task-id>",
-		"若用户没有提供 `task-id`，先询问任务 ID",
-		"任务目录存在但 `taskflow.yaml` 缺失",
-		"这是预期状态，运行 `start --dry-run`",
-		"init <task-id>",
-		"start <task-id> --dry-run",
-		"start <task-id> --execute",
+		"create <task-id>",
+		"create <task-id> --execute",
 		"open <task-id>",
-		"validate <task-id>",
-		"repo add <task-id>",
-		"STATE_CONFLICT",
+		"taskflow.yaml",
+		"dry-run",
+		"SOURCE_BRANCH_LOCKED",
 		"WORKTREE_MISMATCH",
-		"SOURCE_LOCK_UNAVAILABLE",
-		"REPO_ADD_WRITE_FAILED",
-		"VALIDATION_*",
+		"CREATE_WORKTREE_FAILED",
+		"CONFIG_EDIT_REQUIRED",
+		"直接编辑 taskflow.yaml",
 		"--worktree",
+		"dirty",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("skill is missing %q", required)
 		}
 	}
-
 	for _, forbidden := range []string{
+		"status <task-id>",
+		"validate <task-id>",
+		"repo add <task-id>",
+		"state.json",
 		"inventory.json",
-		"contract owners",
-		"角色负责人",
+		"STATE_CONFLICT",
+		"depends_on",
+		"repo add",
 	} {
 		if strings.Contains(text, forbidden) {
-			t.Errorf("skill contains removed or unsupported guidance %q", forbidden)
+			t.Errorf("skill contains retired guidance %q", forbidden)
 		}
 	}
 }
@@ -51,7 +50,6 @@ func TestTaskflowSkillMetadataMatchesTheGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	text := string(content)
 	for _, required := range []string{
 		"Taskflow 工作区向导",
