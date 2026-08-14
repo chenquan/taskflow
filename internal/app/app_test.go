@@ -121,38 +121,99 @@ func TestCreateIsIdempotentAndDoesNotPersistState(t *testing.T) {
 	}
 }
 
-func TestCreateAppendsRepositoryAndDryRunIsNonMutating(t *testing.T) {
+func TestCreateRejectsRepositoryArgumentsForExistingTask(t *testing.T) {
 	repo1, repo2 := makeGitRepo(t), makeGitRepo(t)
 	tasks := t.TempDir()
 	service := New()
-	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "APPEND", Repositories: []string{"one=" + repo1}, Execute: true}); code != report.ExitOK {
+	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "EXISTING", Repositories: []string{"one=" + repo1}, Execute: true}); code != report.ExitOK {
 		t.Fatal(code)
 	}
-	configPath := filepath.Join(tasks, "APPEND", "taskflow.yaml")
+	configPath := filepath.Join(tasks, "EXISTING", "taskflow.yaml")
 	before, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	preview, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "APPEND", Repositories: []string{"two=" + repo2}, DryRun: true})
-	if code != report.ExitOK || !preview.OK {
-		t.Fatalf("append dry-run: code=%d result=%#v", code, preview)
+	for _, options := range []CreateOptions{
+		{TasksRoot: tasks, TaskID: "EXISTING", Repositories: []string{"two=" + repo2}, DryRun: true},
+		{TasksRoot: tasks, TaskID: "EXISTING", Repositories: []string{"malformed"}, Execute: true},
+	} {
+		result, code := service.Create(context.Background(), options)
+		if code != report.ExitConfig || result.OK || !hasDiagnostic(result.Errors, "CONFIG_EDIT_REQUIRED") {
+			t.Fatalf("expected config edit diagnostic: code=%d result=%#v", code, result)
+		}
 	}
 	after, _ := os.ReadFile(configPath)
 	if string(before) != string(after) {
-		t.Fatal("append dry-run changed taskflow.yaml")
+		t.Fatal("existing-task repository arguments changed taskflow.yaml")
 	}
-	if _, err := os.Stat(filepath.Join(tasks, "APPEND", "worktrees", "two")); !os.IsNotExist(err) {
-		t.Fatalf("append dry-run created worktree: %v", err)
+	if _, err := os.Stat(filepath.Join(tasks, "EXISTING", "worktrees", "two")); !os.IsNotExist(err) {
+		t.Fatalf("existing-task repository arguments created worktree: %v", err)
 	}
-	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "APPEND", Repositories: []string{"two=" + repo2}, Execute: true}); code != report.ExitOK || !result.OK {
-		t.Fatalf("append execute: code=%d result=%#v", code, result)
+	if _, err := service.Git.Worktrees(context.Background(), repo2); err != nil {
+		t.Fatal(err)
 	}
-	task, err := service.Load(tasks, "APPEND")
-	if err != nil || len(task.Repositories) != 2 || task.Repositories[1].Name != "two" {
-		t.Fatalf("appended task: %#v err=%v", task.Repositories, err)
+	if task, err := service.Load(tasks, "EXISTING"); err != nil || len(task.Repositories) != 1 || task.Repositories[0].Name != "one" {
+		t.Fatalf("existing task changed: %#v err=%v", task.Repositories, err)
 	}
-	if _, err := os.Stat(filepath.Join(task.Task.Root, task.Repositories[1].Worktree)); err != nil {
-		t.Fatalf("appended worktree missing: %v", err)
+}
+
+func TestCreateReconcilesDirectConfigurationEditsWithoutDeletingWorktrees(t *testing.T) {
+	repo1, repo2 := makeGitRepo(t), makeGitRepo(t)
+	tasks := t.TempDir()
+	service := New()
+	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "EDIT", Repositories: []string{"one=" + repo1}, Execute: true}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	task, err := service.Load(tasks, "EDIT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Repositories = append(task.Repositories, domain.Repository{
+		Name:     "two",
+		Source:   repo2,
+		Base:     "origin/main",
+		Branch:   "feature/edit",
+		Worktree: filepath.Join("worktrees", "two"),
+	})
+	configPath := filepath.Join(task.Task.Root, "taskflow.yaml")
+	raw, err := config.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "EDIT", Execute: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("direct config reconcile: code=%d result=%#v", code, result)
+	}
+	after, _ := os.ReadFile(configPath)
+	if string(before) != string(after) {
+		t.Fatal("reconciliation rewrote user-owned taskflow.yaml")
+	}
+	for _, name := range []string{"one", "two"} {
+		if _, err := os.Stat(filepath.Join(task.Task.Root, "worktrees", name)); err != nil {
+			t.Fatalf("worktree %s missing: %v", name, err)
+		}
+	}
+
+	task.Repositories = task.Repositories[:1]
+	raw, err = config.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "EDIT", Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("direct config removal reconcile: code=%d result=%#v", code, result)
+	}
+	if _, err := os.Stat(filepath.Join(task.Task.Root, "worktrees", "two")); err != nil {
+		t.Fatalf("unlisted worktree was removed: %v", err)
 	}
 }
 

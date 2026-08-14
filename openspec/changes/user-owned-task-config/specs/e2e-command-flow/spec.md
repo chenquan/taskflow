@@ -1,10 +1,4 @@
-# e2e-command-flow Specification
-
-## Purpose
-
-Define complete Cobra and compiled-binary create/open verification.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Exercise the complete CLI task lifecycle
 The test suite SHALL execute the reduced user-facing flow through the Cobra command surface and SHALL verify each command's result, configuration, and relevant Git side effects.
@@ -53,7 +47,7 @@ The test suite SHALL invoke a built `taskflow` binary in addition to in-process 
 - **THEN** the process exits with the configuration exit code and emits a parseable result envelope with `ok: false` and a structured diagnostic
 
 #### Scenario: Successful output preserves command data
-- **WHEN** create or open runs without --json
+- **WHEN** create or open runs without `--json`
 - **THEN** its text output includes the action or launch data needed to understand the result
 
 #### Scenario: Subprocess reduced flow succeeds

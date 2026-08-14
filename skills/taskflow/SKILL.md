@@ -1,6 +1,6 @@
 ---
 name: taskflow
-description: 用 Taskflow 安全创建多 Git 仓库 worktree 工作区并打开 Codex 或 Claude。用户需要准备隔离工作区、追加仓库或启动 AI CLI 时使用。
+description: 用 Taskflow 安全创建多 Git 仓库 worktree 工作区并打开 Codex 或 Claude。用户需要准备隔离工作区或启动 AI CLI 时使用。
 ---
 
 # Taskflow 工作区向导
@@ -43,15 +43,20 @@ taskflow --json --tasks-root <tasks-root> create <task-id> \
 taskflow --json --tasks-root <tasks-root> create <task-id> --execute
 ```
 
-如果需要增加仓库，继续通过 create 追加；已有仓库不会被重排、删除或静默修改：
+如果已有任务需要增加、删除或调整仓库，直接编辑 taskflow.yaml。不要向已有任务传入 `--repo`；Taskflow 会要求配置编辑后重新执行 create：
 
 ```bash
-taskflow --json --tasks-root <tasks-root> create <task-id> \
-  --repo <new-name>=<absolute-path> \
-  --dry-run
+# 编辑 <tasks-root>/<task-id>/taskflow.yaml
+taskflow --json --tasks-root <tasks-root> create <task-id> --dry-run
 ```
 
-追加的 dry-run 获得确认后，再用相同参数执行 `--execute`。如果之前只创建了部分 worktree，再次 create 会复用匹配的 worktree，只补齐缺失项。
+配置 dry-run 获得确认后，再执行：
+
+```bash
+taskflow --json --tasks-root <tasks-root> create <task-id> --execute
+```
+
+删除配置中的仓库不会删除已有 worktree；如果修改后的 source、branch、base 或 target 与实时 Git 不匹配，先修复配置或现场，再重试。如果之前只创建了部分 worktree，再次 create 会复用匹配的 worktree，只补齐缺失项。
 
 ## 打开 CLI
 
@@ -70,6 +75,7 @@ taskflow --tasks-root <tasks-root> open <task-id> --tool codex -- --model <model
 优先使用 JSON 输出，读取 `code`、`repo` 和 `message`，再采取最小修复：
 
 - `INVALID_CONFIGURATION`、`INVALID_TASK_ID`：检查 taskflow.yaml、任务 ID 和路径，不覆盖现有配置。
+- `CONFIG_EDIT_REQUIRED`：已有 taskflow.yaml，不要使用 `--repo`；直接编辑配置后重新运行不带 `--repo` 的 create。
 - `BASE_REF_NOT_FOUND`：先在 source 仓库准备本地 base ref，再重试 create；Taskflow 不隐式 fetch。
 - `WORKTREE_MISMATCH`、`WORKTREE_INVALID`、`BRANCH_OCCUPIED`：检查 `git worktree list --porcelain`，不要删除或强行覆盖冲突目标。
 - `SOURCE_BRANCH_LOCKED`、`TASK_LOCKED`：报告锁冲突，等待占用操作完成后重试，不删除锁文件。

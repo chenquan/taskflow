@@ -89,7 +89,7 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 	}
 	defer taskLock.Release()
 
-	// Resolve and inspect again after acquiring the task lock so an append
+	// Resolve and inspect again after acquiring the task lock so a bootstrap
 	// cannot race with another create that changed taskflow.yaml.
 	resolved, diagnostic, code = s.resolveCreate(ctx, tasksRoot, o)
 	if diagnostic != nil {
@@ -179,11 +179,14 @@ func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOp
 		}
 		return createResolution{task: task}, nil, report.ExitOK
 	}
-
-	existing := make(map[string]bool, len(task.Repositories))
-	for _, repository := range task.Repositories {
-		existing[repository.Name] = true
+	if configurationExists {
+		return createResolution{}, &report.Diagnostic{
+			Code:    "CONFIG_EDIT_REQUIRED",
+			Message: "taskflow.yaml already exists; edit it directly and rerun create without --repo",
+			Hint:    configPath,
+		}, report.ExitConfig
 	}
+
 	for _, raw := range o.Repositories {
 		repository, err := resolveRepository(o.TaskID, raw)
 		if err != nil {
@@ -193,10 +196,6 @@ func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOp
 		if err != nil {
 			return createResolution{}, &report.Diagnostic{Code: "REMOTE_DEFAULT_UNAVAILABLE", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
 		}
-		if existing[repository.Name] {
-			return createResolution{}, &report.Diagnostic{Code: "REPOSITORY_EXISTS", Repo: repository.Name, Message: "repository already exists in the task"}, report.ExitConfig
-		}
-		existing[repository.Name] = true
 		task.Repositories = append(task.Repositories, repository)
 	}
 	if err := config.Validate(&task); err != nil {

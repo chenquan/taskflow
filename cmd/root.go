@@ -55,9 +55,9 @@ func NewRootCommand() *cobra.Command {
 		})
 		return render(c, r, code)
 	}}
-	create.Flags().StringSliceVar(&repositories, "repo", nil, "repository name=path (repeatable for new or appended repositories)")
+	create.Flags().StringSliceVar(&repositories, "repo", nil, "repository name=path (repeatable for a new task only)")
 	create.Flags().BoolVar(&dryRun, "dry-run", false, "show the reconciliation plan without changing files or Git state (default)")
-	create.Flags().BoolVar(&execute, "execute", false, "write taskflow.yaml and create missing worktrees")
+	create.Flags().BoolVar(&execute, "execute", false, "write initial taskflow.yaml and create missing worktrees")
 	root.AddCommand(create)
 
 	var tool string

@@ -51,11 +51,11 @@ taskflow --tasks-root ~/tasks open REFUND-123 --tool claude
 taskflow --tasks-root ~/tasks open REFUND-123 --tool codex -- --model gpt-5
 ```
 
-`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、worktree、分支或锁目录；execute 会在完整 preflight 后写配置并创建缺失的 worktree。
+`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、worktree、分支或锁目录；新任务的 execute 会在完整 preflight 后写入初始配置并创建缺失的 worktree。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree。
 
 `open` 默认启动从 `PATH` 解析的 Codex。它使用第一个 worktree 作为 cwd，将后续 worktree 和任务根目录作为 additional directories。工具参数在 `--` 后原样透传，但 `--worktree` 和 `--worktree=...` 会被拒绝，以避免嵌套 worktree。匹配但 dirty 的 worktree 不会被拒绝。
 
-## 重试和追加仓库
+## 重试和修改配置
 
 创建是基于实时 Git 事实的 reconciliation，不依赖持久 action state：
 
@@ -65,17 +65,16 @@ taskflow --tasks-root ~/tasks create REFUND-123 --execute
 
 已存在且 source common directory、branch、target path 都匹配的 worktree 会被复用；缺失的会被创建；不匹配的目标不会被删除或覆盖。若一次创建在中途失败，修复外部原因后重新执行相同命令即可。
 
-增加仓库也通过 create 完成，已有仓库不会被重排、删除或静默修改：
+已有任务的仓库集合由用户或 AI 直接维护 taskflow.yaml。修改配置后，先运行不带 `--repo` 的 dry-run，再显式执行：
 
 ```bash
-taskflow --tasks-root ~/tasks create REFUND-123 \
-  --repo inventory-service=~/projects/inventory-service \
-  --dry-run
+# 编辑 ~/tasks/REFUND-123/taskflow.yaml，增加 inventory-service
 
-taskflow --tasks-root ~/tasks create REFUND-123 \
-  --repo inventory-service=~/projects/inventory-service \
-  --execute
+taskflow --tasks-root ~/tasks create REFUND-123 --dry-run
+taskflow --tasks-root ~/tasks create REFUND-123 --execute
 ```
+
+taskflow.yaml 中删除仓库不会删除已有 worktree；修改 source、branch、base 或 worktree 后如果实时 Git 状态不匹配，create 会在 mutation 前返回冲突。已有 taskflow.yaml 时传入 `--repo` 会返回 `CONFIG_EDIT_REQUIRED`，不会执行追加或修改。
 
 ## 任务目录和配置
 
@@ -113,7 +112,7 @@ repositories:
 
 `source` 使用绝对路径，`base` 必须在本地可解析，`worktree` 必须位于任务的 `worktrees/` 目录内。Taskflow 不隐式 fetch；请在 source 仓库准备好 base 后再重试 create。
 
-通过 `--repo` 新增仓库时，Taskflow 默认读取该 source 的 `origin/HEAD`，并将其解析到本地可用的远程默认分支作为 base；同时生成 `feature/<task-id>` 分支。`origin/HEAD` 缺失或对应引用不可用时，create 会在写入配置或创建 worktree 前失败。已存在配置中的显式 `base` 和 `branch` 保持不变。
+首次通过 `--repo` 声明仓库时，Taskflow 默认读取该 source 的 `origin/HEAD`，并将其解析到本地可用的远程默认分支作为 base；同时生成 `feature/<task-id>` 分支。`origin/HEAD` 缺失或对应引用不可用时，create 会在写入初始配置或创建 worktree 前失败。已存在配置中的显式 `base` 和 `branch` 保持不变；已有配置的后续修改由用户或 AI 直接编辑 YAML。
 
 ## 安全边界
 
@@ -122,14 +121,14 @@ execute-mode create 会：
 1. 获取任务锁；
 2. 按 canonical Git common directory 和 branch 获取 source lock；
 3. 检查所有 source、base、branch 占用、target 和 worktree identity；
-4. 通过 atomic write 写入 taskflow.yaml；
+4. 对新任务通过 atomic write 写入初始 taskflow.yaml；已有任务不重写用户配置；
 5. 只创建缺失的 worktree。
 
 任何 preflight 冲突都会在 Git mutation 前返回。Taskflow 不删除、移动、reset 或覆盖用户已有目录，也不宣称 worktree ownership；结构匹配的手工 worktree 可以被 `open` 使用。
 
 ## 破坏性兼容边界
 
-当前版本只支持 create/open 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。需要使用当前版本时，请重新创建任务目录；新版本不会自动删除旧文件。
+当前版本只支持 create/open 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。已有任务的 `create --repo` 追加调用也不再支持；请直接编辑 taskflow.yaml。需要使用当前版本时，请重新创建任务目录；新版本不会自动删除旧文件。
 
 ## 非目标
 

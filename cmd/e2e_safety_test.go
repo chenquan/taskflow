@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chenquan/taskflow/internal/config"
+	"github.com/chenquan/taskflow/internal/domain"
 	"github.com/chenquan/taskflow/internal/execx"
 	"github.com/chenquan/taskflow/internal/git"
 	"github.com/chenquan/taskflow/internal/lock"
@@ -123,6 +125,70 @@ func TestE2ESourceBranchLockConflict(t *testing.T) {
 	output, err := runE2E(t, tasks, "--json", "create", "LOCK", "--execute")
 	if err == nil || !strings.Contains(output, "SOURCE_BRANCH_LOCKED") {
 		t.Fatalf("expected source lock conflict: err=%v output=%s", err, output)
+	}
+}
+
+func TestE2EDirectConfigurationEditAndAppendRejection(t *testing.T) {
+	repo1, repo2 := e2eGitRepo(t), e2eGitRepo(t)
+	tasks := t.TempDir()
+	if output, err := runE2E(t, tasks, "create", "EDIT", "--repo", "one="+repo1, "--execute"); err != nil {
+		t.Fatalf("initial create: %v: %s", err, output)
+	}
+
+	configPath := filepath.Join(tasks, "EDIT", "taskflow.yaml")
+	task, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Repositories = append(task.Repositories, domain.Repository{
+		Name:     "two",
+		Source:   repo2,
+		Base:     "origin/main",
+		Branch:   "feature/edit",
+		Worktree: filepath.Join("worktrees", "two"),
+	})
+	raw, err := config.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runE2E(t, tasks, "--json", "create", "EDIT", "--execute"); err != nil {
+		t.Fatalf("direct config reconcile: %v: %s", err, output)
+	}
+	after, _ := os.ReadFile(configPath)
+	if string(before) != string(after) {
+		t.Fatal("direct config reconcile rewrote taskflow.yaml")
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "EDIT", "worktrees", "two")); err != nil {
+		t.Fatalf("directly declared worktree missing: %v", err)
+	}
+
+	if output, err := runE2E(t, tasks, "--json", "create", "EDIT", "--repo", "three="+e2eGitRepo(t), "--dry-run"); err == nil || !strings.Contains(output, "CONFIG_EDIT_REQUIRED") {
+		t.Fatalf("expected CONFIG_EDIT_REQUIRED: err=%v output=%s", err, output)
+	}
+	if got, _ := os.ReadFile(configPath); string(got) != string(after) {
+		t.Fatal("existing-task --repo changed taskflow.yaml")
+	}
+
+	task.Repositories = task.Repositories[:1]
+	raw, err = config.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runE2E(t, tasks, "create", "EDIT", "--execute"); err != nil {
+		t.Fatalf("direct config removal reconcile: %v: %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "EDIT", "worktrees", "two")); err != nil {
+		t.Fatalf("unlisted worktree was removed: %v", err)
 	}
 }
 

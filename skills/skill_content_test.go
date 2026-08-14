@@ -20,6 +20,8 @@ func TestTaskflowSkillGuidesCreateAndOpen(t *testing.T) {
 		"SOURCE_BRANCH_LOCKED",
 		"WORKTREE_MISMATCH",
 		"CREATE_WORKTREE_FAILED",
+		"CONFIG_EDIT_REQUIRED",
+		"直接编辑 taskflow.yaml",
 		"--worktree",
 		"dirty",
 	} {
@@ -35,6 +37,7 @@ func TestTaskflowSkillGuidesCreateAndOpen(t *testing.T) {
 		"inventory.json",
 		"STATE_CONFLICT",
 		"depends_on",
+		"repo add",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("skill contains retired guidance %q", forbidden)

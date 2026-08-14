@@ -1,10 +1,13 @@
 # worktree-reconciliation Specification
 
 ## Purpose
-TBD - created by archiving change minimal-worktree-cli. Update Purpose after archive.
+
+Define state-free reconciliation of user/agent-owned taskflow.yaml declarations against live Git worktrees.
+
 ## Requirements
+
 ### Requirement: Reconcile declared repositories from live Git facts
-The CLI SHALL provide `taskflow create <task-id> [--repo <name>=<absolute-path>]... [--dry-run|--execute]`. `taskflow.yaml` SHALL be the only persisted desired configuration; the CLI MUST derive completion and conflicts from live Git source and worktree inspection rather than a state journal, phase, action outcome, digest, inventory, or validation report.
+The CLI SHALL provide `taskflow create <task-id> [--repo <name>=<absolute-path>]... [--dry-run|--execute]`. Repeated `--repo` declarations SHALL be accepted only when the task has no `taskflow.yaml`; when `taskflow.yaml` exists, any `--repo` argument MUST return `CONFIG_EDIT_REQUIRED` and MUST NOT merge or append configuration. `taskflow.yaml` SHALL be the only persisted desired configuration; the CLI MUST derive completion and conflicts from live Git source and worktree inspection rather than a state journal, phase, action outcome, digest, inventory, or validation report.
 
 #### Scenario: Create a new task in dry-run mode
 - **WHEN** the user supplies one or more valid repositories for a task that has no taskflow.yaml and runs `create --dry-run`
@@ -12,11 +15,15 @@ The CLI SHALL provide `taskflow create <task-id> [--repo <name>=<absolute-path>]
 
 #### Scenario: Reconcile an existing task without repository arguments
 - **WHEN** taskflow.yaml exists and the user runs `create <task-id> --execute` without `--repo`
-- **THEN** the command reconciles every declared repository from the current Git facts
+- **THEN** the command reconciles every declared repository from the current Git facts without rewriting taskflow.yaml
 
-#### Scenario: Append a new repository through create
-- **WHEN** an existing task receives a new unique `--repo name=path` declaration
-- **THEN** create appends it in declaration order, preserves every existing repository, and plans or creates only the new missing worktree
+#### Scenario: Reject repository arguments for an existing task
+- **WHEN** taskflow.yaml exists and the user runs `create <task-id> --repo <name>=<path>`
+- **THEN** create returns `CONFIG_EDIT_REQUIRED` before configuration or Git mutation and instructs the user or agent to edit taskflow.yaml directly before rerunning create without --repo
+
+#### Scenario: Reconcile a directly edited configuration
+- **WHEN** a user or agent adds a valid repository declaration to an existing taskflow.yaml and runs create
+- **THEN** create validates the complete configuration and plans or creates only the missing worktree while preserving all existing declarations and worktrees
 
 ### Requirement: Reconcile worktrees idempotently and safely
 Create SHALL classify each repository as `create` when its configured target is absent, or `reuse` when a registered worktree has the configured target path, source common directory, and branch. It MUST reject an existing mismatched target or occupied branch before mutation and MUST never delete, move, reset, or overwrite an existing user path.
@@ -34,7 +41,7 @@ Create SHALL classify each repository as `create` when its configured target is 
 - **THEN** create reuses the existing matching worktree and creates only missing worktrees without requiring persisted action state
 
 ### Requirement: Execute only after complete preflight
-Execute-mode create MUST acquire the task lock and all required source/branch locks, inspect every source, base ref, branch occupancy, target path, and target identity before writing taskflow.yaml or invoking a mutating Git command. A source or branch lock MUST be acquired in deterministic order and released when create returns.
+Execute-mode create MUST acquire the task lock and all required source/branch locks, inspect every source, base ref, branch occupancy, target path, and target identity before writing an initial taskflow.yaml or invoking a mutating Git command. A source or branch lock MUST be acquired in deterministic order and released when create returns.
 
 #### Scenario: Preflight blocks before mutation
 - **WHEN** any repository has an unavailable base, invalid source, branch conflict, or mismatched target
