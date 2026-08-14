@@ -47,3 +47,18 @@ func TestLoadRejectsUnsupportedVersion(t *testing.T) {
 		t.Fatal("expected unsupported version error")
 	}
 }
+
+func TestValidateRejectsMalformedEntries(t *testing.T) {
+	valid := Worktree{Repository: "repo", Source: "/source", CommonDir: "/source/.git", Branch: "feature/task", Target: "/task/worktrees/repo"}
+	cases := []Manifest{
+		{Version: 99, TaskID: "TASK", Worktrees: []Worktree{valid}},
+		{Version: Version, Worktrees: []Worktree{valid}},
+		{Version: Version, TaskID: "TASK", Worktrees: []Worktree{{Repository: "repo"}}},
+		{Version: Version, TaskID: "TASK", Worktrees: []Worktree{valid, valid}},
+	}
+	for index, manifest := range cases {
+		if err := Validate(manifest); err == nil {
+			t.Fatalf("case %d unexpectedly passed", index)
+		}
+	}
+}

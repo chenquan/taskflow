@@ -13,6 +13,7 @@ import (
 	"github.com/chenquan/taskflow/internal/domain"
 	"github.com/chenquan/taskflow/internal/execx"
 	"github.com/chenquan/taskflow/internal/git"
+	"github.com/chenquan/taskflow/internal/ownership"
 	"github.com/chenquan/taskflow/internal/plan"
 	"github.com/chenquan/taskflow/internal/report"
 )
@@ -289,6 +290,140 @@ func TestLoadRejectsLegacyRuntimeArtifacts(t *testing.T) {
 	}
 	if _, err := service.Load(tasks, "LEGACY"); err == nil || !strings.Contains(err.Error(), "legacy runtime artifact") {
 		t.Fatalf("expected legacy artifact error, got %v", err)
+	}
+}
+
+func TestDeleteRejectsInvalidArgumentsAndMissingTask(t *testing.T) {
+	service := New()
+	root := t.TempDir()
+	cases := []struct {
+		name string
+		want string
+		opt  DeleteOptions
+	}{
+		{name: "missing arguments", want: "INVALID_ARGUMENT", opt: DeleteOptions{TaskID: "TASK"}},
+		{name: "conflicting modes", want: "INVALID_ARGUMENT", opt: DeleteOptions{TasksRoot: root, TaskID: "TASK", DryRun: true, Execute: true}},
+		{name: "force without execute", want: "INVALID_ARGUMENT", opt: DeleteOptions{TasksRoot: root, TaskID: "TASK", Force: true}},
+		{name: "invalid task id", want: "INVALID_TASK_ID", opt: DeleteOptions{TasksRoot: root, TaskID: "../TASK"}},
+		{name: "missing tasks root", want: "TASKS_ROOT_NOT_FOUND", opt: DeleteOptions{TasksRoot: filepath.Join(root, "missing"), TaskID: "TASK"}},
+		{name: "missing task", want: "TASK_NOT_FOUND", opt: DeleteOptions{TasksRoot: root, TaskID: "TASK"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, code := service.Delete(context.Background(), tc.opt)
+			if result.OK || !hasDiagnostic(result.Errors, tc.want) || code == report.ExitOK {
+				t.Fatalf("code=%d result=%#v", code, result)
+			}
+		})
+	}
+}
+
+func TestDeleteRejectsInvalidOwnership(t *testing.T) {
+	repo := makeGitRepo(t)
+	tasks := t.TempDir()
+	service := New()
+	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "OWNERSHIP", Repositories: []string{"repo=" + repo}, Execute: true}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	taskRoot := filepath.Join(tasks, "OWNERSHIP")
+	ownershipPath := filepath.Join(taskRoot, ".taskflow", "ownership.json")
+	if err := os.WriteFile(ownershipPath, []byte("not-json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if result, code := service.Delete(context.Background(), DeleteOptions{TasksRoot: tasks, TaskID: "OWNERSHIP"}); code != report.ExitConfig || result.OK || !hasDiagnostic(result.Errors, "INVALID_OWNERSHIP") {
+		t.Fatalf("malformed ownership: code=%d result=%#v", code, result)
+	}
+	if err := os.WriteFile(ownershipPath, []byte(`{"version":1,"taskID":"OTHER","worktrees":[]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if result, code := service.Delete(context.Background(), DeleteOptions{TasksRoot: tasks, TaskID: "OWNERSHIP"}); code != report.ExitConfig || result.OK || !hasDiagnostic(result.Errors, "INVALID_OWNERSHIP") {
+		t.Fatalf("ownership task mismatch: code=%d result=%#v", code, result)
+	}
+}
+
+func TestDeleteRejectsConfigurationOwnershipMismatchAndProtectedBranch(t *testing.T) {
+	repo := makeGitRepo(t)
+	tasks := t.TempDir()
+	service := New()
+	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "MISMATCH", Repositories: []string{"repo=" + repo}, Execute: true}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	task, err := service.Load(tasks, "MISMATCH")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(task.Task.Root, "taskflow.yaml")
+	task.Repositories[0].Branch = "feature/other"
+	raw, err := config.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if result, code := service.Delete(context.Background(), DeleteOptions{TasksRoot: tasks, TaskID: "MISMATCH"}); code != report.ExitConflict || result.OK || !hasDiagnostic(result.Errors, "OWNERSHIP_MISMATCH") {
+		t.Fatalf("configuration mismatch: code=%d result=%#v", code, result)
+	}
+
+	if err := os.WriteFile(configPath, mustMarshalTask(t, task, "main"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	manifest, exists, err := ownership.Load(task.Task.Root)
+	if err != nil || !exists {
+		t.Fatalf("load ownership: exists=%v err=%v", exists, err)
+	}
+	manifest.Worktrees[0].Branch = "main"
+	if err := ownership.Save(task.Task.Root, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if result, code := service.Delete(context.Background(), DeleteOptions{TasksRoot: tasks, TaskID: "MISMATCH"}); code != report.ExitConflict || result.OK || !hasDiagnostic(result.Errors, "PROTECTED_BRANCH") {
+		t.Fatalf("protected branch: code=%d result=%#v", code, result)
+	}
+}
+
+func TestDeleteHandlesAlreadyRemovedOwnedResources(t *testing.T) {
+	repo := makeGitRepo(t)
+	tasks := t.TempDir()
+	service := New()
+	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "ALREADY-REMOVED", Repositories: []string{"repo=" + repo}, Execute: true}); code != report.ExitOK {
+		t.Fatal(code)
+	}
+	taskRoot := filepath.Join(tasks, "ALREADY-REMOVED")
+	target := filepath.Join(taskRoot, "worktrees", "repo")
+	if output, err := exec.Command("git", "-C", repo, "worktree", "remove", target).CombinedOutput(); err != nil {
+		t.Fatalf("remove worktree: %v: %s", err, output)
+	}
+	if output, err := exec.Command("git", "-C", repo, "branch", "-D", "feature/already-removed").CombinedOutput(); err != nil {
+		t.Fatalf("remove branch: %v: %s", err, output)
+	}
+	preview, code := service.Delete(context.Background(), DeleteOptions{TasksRoot: tasks, TaskID: "ALREADY-REMOVED"})
+	if code != report.ExitOK || !preview.OK {
+		t.Fatalf("preview: code=%d result=%#v", code, preview)
+	}
+	if result, code := service.Delete(context.Background(), DeleteOptions{TasksRoot: tasks, TaskID: "ALREADY-REMOVED", Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("execute: code=%d result=%#v", code, result)
+	}
+	if _, err := os.Stat(taskRoot); !os.IsNotExist(err) {
+		t.Fatalf("task root remains: %v", err)
+	}
+}
+
+func mustMarshalTask(t *testing.T, task domain.Task, branch string) []byte {
+	t.Helper()
+	task.Repositories[0].Branch = branch
+	raw, err := config.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestGitErrorMessage(t *testing.T) {
+	if got := gitErrorMessage("prefix", nil); got != "prefix" {
+		t.Fatalf("nil error message=%q", got)
+	}
+	if got := gitErrorMessage("prefix", errors.New("boom")); got != "prefix: boom" {
+		t.Fatalf("error message=%q", got)
 	}
 }
 
