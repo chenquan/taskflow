@@ -192,4 +192,108 @@ func TestE2EDirectConfigurationEditAndAppendRejection(t *testing.T) {
 	}
 }
 
+func TestE2EDeleteOnlyRemovesOwnedTask(t *testing.T) {
+	repo := e2eGitRepo(t)
+	tasks := t.TempDir()
+	if output, err := runE2E(t, tasks, "create", "DELETE", "--repo", "repo="+repo, "--execute"); err != nil {
+		t.Fatalf("create: %v: %s", err, output)
+	}
+	taskRoot := filepath.Join(tasks, "DELETE")
+	if _, err := os.Stat(filepath.Join(taskRoot, ".taskflow", "ownership.json")); err != nil {
+		t.Fatalf("ownership manifest missing: %v", err)
+	}
+	preview, err := runE2E(t, tasks, "--json", "delete", "DELETE")
+	if err != nil || !strings.Contains(preview, "REMOVE worktree") || !strings.Contains(preview, "DELETE local branch") {
+		t.Fatalf("delete dry-run: %v: %s", err, preview)
+	}
+	if _, err := os.Stat(taskRoot); err != nil {
+		t.Fatalf("dry-run removed task root: %v", err)
+	}
+	if output, err := runE2E(t, tasks, "--json", "delete", "DELETE", "--execute"); err != nil {
+		t.Fatalf("delete execute: %v: %s", err, output)
+	}
+	if _, err := os.Stat(taskRoot); !os.IsNotExist(err) {
+		t.Fatalf("task root remains: %v", err)
+	}
+	if output, err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "refs/heads/feature/delete").CombinedOutput(); err == nil {
+		t.Fatalf("task branch remains: %s", output)
+	}
+	worktrees, err := (git.Client{Runner: gitRunner()}).Worktrees(context.Background(), repo)
+	if err != nil || len(worktrees) != 1 {
+		t.Fatalf("source worktrees after delete: %v: %#v", err, worktrees)
+	}
+}
+
+func TestE2EDeleteRefusesUnownedAndDirtyWorktrees(t *testing.T) {
+	repo := e2eGitRepo(t)
+	tasks := t.TempDir()
+	if output, err := runE2E(t, tasks, "create", "UNOWNED", "--repo", "repo="+repo, "--execute"); err != nil {
+		t.Fatalf("create: %v: %s", err, output)
+	}
+	taskRoot := filepath.Join(tasks, "UNOWNED")
+	if err := os.Remove(filepath.Join(taskRoot, ".taskflow", "ownership.json")); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runE2E(t, tasks, "--json", "delete", "UNOWNED", "--execute"); err == nil || !strings.Contains(output, "OWNERSHIP_NOT_FOUND") {
+		t.Fatalf("expected ownership refusal: %v: %s", err, output)
+	}
+	if _, err := os.Stat(taskRoot); err != nil {
+		t.Fatalf("unowned delete changed task root: %v", err)
+	}
+
+	if output, err := runE2E(t, tasks, "create", "DIRTY", "--repo", "repo="+repo, "--execute"); err != nil {
+		t.Fatalf("second create: %v: %s", err, output)
+	}
+	dirtyTarget := filepath.Join(tasks, "DIRTY", "worktrees", "repo")
+	if err := os.WriteFile(filepath.Join(dirtyTarget, "local.txt"), []byte("keep me"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runE2E(t, tasks, "--json", "delete", "DIRTY", "--execute"); err == nil || !strings.Contains(output, "WORKTREE_DIRTY") {
+		t.Fatalf("expected dirty refusal: %v: %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(dirtyTarget, "local.txt")); err != nil {
+		t.Fatalf("dirty file was removed: %v", err)
+	}
+	if output, err := runE2E(t, tasks, "--json", "delete", "DIRTY", "--execute", "--force"); err != nil {
+		t.Fatalf("forced delete: %v: %s", err, output)
+	}
+}
+
+func TestE2EDeleteRefusesUnmanagedTaskFiles(t *testing.T) {
+	repo := e2eGitRepo(t)
+	tasks := t.TempDir()
+	if output, err := runE2E(t, tasks, "create", "EXTRA", "--repo", "repo="+repo, "--execute"); err != nil {
+		t.Fatalf("create: %v: %s", err, output)
+	}
+	taskRoot := filepath.Join(tasks, "EXTRA")
+	note := filepath.Join(taskRoot, "notes.md")
+	if err := os.WriteFile(note, []byte("keep"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runE2E(t, tasks, "--json", "delete", "EXTRA", "--execute"); err == nil || !strings.Contains(output, "DELETE_DIRECTORY_UNSAFE") {
+		t.Fatalf("expected extra-file refusal: %v: %s", err, output)
+	}
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("extra file was removed: %v", err)
+	}
+}
+
+func TestE2EDeleteRequiresKnownDefaultBranch(t *testing.T) {
+	repo := e2eGitRepo(t)
+	tasks := t.TempDir()
+	if output, err := runE2E(t, tasks, "create", "NODEFAULT", "--repo", "repo="+repo, "--execute"); err != nil {
+		t.Fatalf("create: %v: %s", err, output)
+	}
+	if output, err := exec.Command("git", "-C", repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("remove origin/HEAD: %v: %s", err, output)
+	}
+	output, err := runE2E(t, tasks, "--json", "delete", "NODEFAULT", "--execute")
+	if err == nil || !strings.Contains(output, "DEFAULT_BRANCH_UNKNOWN") {
+		t.Fatalf("expected default branch refusal: %v: %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "NODEFAULT")); err != nil {
+		t.Fatalf("default branch refusal changed task root: %v", err)
+	}
+}
+
 func gitRunner() execx.Runner { return execx.OSRunner{} }

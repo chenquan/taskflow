@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define complete Cobra and compiled-binary create/open verification.
+Define complete Cobra and compiled-binary create/open/delete verification.
 
 ## Requirements
 
@@ -11,7 +11,7 @@ The test suite SHALL execute the reduced user-facing flow through the Cobra comm
 
 #### Scenario: In-process create and open preparation succeeds
 - **WHEN** a test runs create --dry-run, create --execute, and open preflight against temporary valid repositories
-- **THEN** dry-run reports actions without creating configuration or worktrees, execute writes only taskflow.yaml and creates worktrees, and open reaches the tool launch boundary
+- **THEN** dry-run reports actions without creating configuration or worktrees, execute writes taskflow.yaml and ownership metadata and creates worktrees, and open reaches the tool launch boundary
 
 #### Scenario: Incomplete or dirty work is handled from live facts
 - **WHEN** a configured target is missing or mismatched, or a matching worktree is dirty
@@ -46,7 +46,7 @@ The test suite SHALL execute the reduced user-facing flow through the Cobra comm
 - **THEN** the CLI returns the documented structured failure and preserves existing configuration and Git state
 
 ### Requirement: Verify executable and rendering boundaries
-The test suite SHALL invoke a built `taskflow` binary in addition to in-process Cobra commands and SHALL verify stable JSON/text output and process exit codes for create and open.
+The test suite SHALL invoke a built `taskflow` binary in addition to in-process Cobra commands and SHALL verify stable JSON/text output and process exit codes for create, open, and delete.
 
 #### Scenario: Subprocess reports a configuration failure
 - **WHEN** the built binary runs create or open with an invalid task identifier in JSON mode
@@ -58,4 +58,4 @@ The test suite SHALL invoke a built `taskflow` binary in addition to in-process 
 
 #### Scenario: Subprocess reduced flow succeeds
 - **WHEN** the built binary executes create dry-run and execute against temporary repositories
-- **THEN** its process exit codes, JSON envelopes, text reports, and Git worktree state match the create/open contract
+- **THEN** its process exit codes, JSON envelopes, text reports, and Git worktree state match the create/open/delete contract
