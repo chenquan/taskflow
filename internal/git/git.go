@@ -163,3 +163,22 @@ func (c Client) AddWorktree(ctx context.Context, source, branch, target, base st
 	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: args})
 	return err
 }
+
+func (c Client) RemoveWorktree(ctx context.Context, source, target string, force bool) error {
+	args := []string{"-C", source, "worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, target)
+	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: args})
+	return err
+}
+
+func (c Client) DeleteBranch(ctx context.Context, source, branch string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", source, "branch", flag, branch}})
+	return err
+}

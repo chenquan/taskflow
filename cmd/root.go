@@ -73,6 +73,22 @@ func NewRootCommand() *cobra.Command {
 	}}
 	open.Flags().StringVar(&tool, "tool", "", "codex or claude")
 	root.AddCommand(open)
+
+	var deleteDryRun, deleteExecute, deleteForce bool
+	remove := &cobra.Command{Use: "delete <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		r, code := svc.Delete(context.Background(), app.DeleteOptions{
+			TasksRoot: tasksRoot,
+			TaskID:    args[0],
+			DryRun:    deleteDryRun || !deleteExecute,
+			Execute:   deleteExecute,
+			Force:     deleteForce,
+		})
+		return render(c, r, code)
+	}}
+	remove.Flags().BoolVar(&deleteDryRun, "dry-run", false, "show the cleanup plan without changing files or Git state (default)")
+	remove.Flags().BoolVar(&deleteExecute, "execute", false, "remove Taskflow-owned worktrees, local branches, and the task directory")
+	remove.Flags().BoolVar(&deleteForce, "force", false, "allow deleting dirty worktrees and unmerged local branches (requires --execute)")
+	root.AddCommand(remove)
 	return root
 }
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestTaskflowSkillGuidesCreateAndOpen(t *testing.T) {
+func TestTaskflowSkillGuidesCreateOpenAndDelete(t *testing.T) {
 	content, err := Files.ReadFile("taskflow/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
@@ -15,6 +15,9 @@ func TestTaskflowSkillGuidesCreateAndOpen(t *testing.T) {
 		"create <task-id>",
 		"create <task-id> --execute",
 		"open <task-id>",
+		"delete <task-id>",
+		"ownership.json",
+		"OWNERSHIP_NOT_FOUND",
 		"taskflow.yaml",
 		"dry-run",
 		"SOURCE_BRANCH_LOCKED",

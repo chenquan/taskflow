@@ -1,8 +1,8 @@
 # Taskflow
 
-Taskflow 是一个面向 AI 编程的多 Git 仓库 worktree 安全协调 CLI。它只做两件事：根据声明式配置创建或复用隔离 worktree，以及把准备好的多仓库工作区一次性交给 Codex 或 Claude。
+Taskflow 是一个面向 AI 编程的多 Git 仓库 worktree 安全协调 CLI。它负责根据声明式配置创建或复用隔离 worktree、把准备好的多仓库工作区一次性交给 Codex 或 Claude，并安全清理 Taskflow 自己创建且登记过的任务资源。
 
-Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、合并、发布、验证脚本或 worktree 清理。这些操作继续由用户和各仓库自己的流程负责。
+Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、合并、发布或验证脚本。这些操作继续由用户和各仓库自己的流程负责。
 
 ## 核心能力
 
@@ -11,6 +11,7 @@ Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、�
 - dry-run、全量 preflight、任务锁和 source/branch 锁
 - 基于实时 Git 事实的幂等创建和中断后重试
 - 一条 `open` 命令将所有仓库关联到 Codex 或 Claude
+- 基于 ownership manifest 的任务资源 dry-run 和安全清理
 - 文本和 JSON 输出中的 create/reuse、冲突和 CLI 启动信息
 
 ## 安装
@@ -49,9 +50,12 @@ taskflow --tasks-root ~/tasks create REFUND-123 \
 taskflow --tasks-root ~/tasks open REFUND-123
 taskflow --tasks-root ~/tasks open REFUND-123 --tool claude
 taskflow --tasks-root ~/tasks open REFUND-123 --tool codex -- --model gpt-5
+
+taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
+taskflow --tasks-root ~/tasks delete REFUND-123 --execute
 ```
 
-`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、worktree、分支或锁目录；新任务的 execute 会在完整 preflight 后写入初始配置并创建缺失的 worktree。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree。
+`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、worktree、分支或锁目录；新任务的 execute 会在完整 preflight 后写入初始配置并创建缺失的 worktree。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
 
 `open` 默认启动从 `PATH` 解析的 Codex。它使用第一个 worktree 作为 cwd，将后续 worktree 和任务根目录作为 additional directories。工具参数在 `--` 后原样透传，但 `--worktree` 和 `--worktree=...` 会被拒绝，以避免嵌套 worktree。匹配但 dirty 的 worktree 不会被拒绝。
 
@@ -74,17 +78,34 @@ taskflow --tasks-root ~/tasks create REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks create REFUND-123 --execute
 ```
 
-taskflow.yaml 中删除仓库不会删除已有 worktree；修改 source、branch、base 或 worktree 后如果实时 Git 状态不匹配，create 会在 mutation 前返回冲突。已有 taskflow.yaml 时传入 `--repo` 会返回 `CONFIG_EDIT_REQUIRED`，不会执行追加或修改。
+taskflow.yaml 中删除仓库不会删除已有 worktree；修改 source、branch、base 或 worktree 后如果实时 Git 状态不匹配，create 会在 mutation 前返回冲突。已有 taskflow.yaml 时传入 `--repo` 会返回 `CONFIG_EDIT_REQUIRED`，不会执行追加或修改。删除任务要求 ownership manifest 与当前 taskflow.yaml 完全匹配；手工创建或已被修改配置引用的 worktree 不会被自动删除。
+
+## 删除任务
+
+删除默认只预览，不改变 Git 或文件系统：
+
+```bash
+taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
+```
+
+确认 action 后显式执行：
+
+```bash
+taskflow --tasks-root ~/tasks delete REFUND-123 --execute
+```
+
+execute 会在锁和完整 preflight 后删除 Taskflow ownership manifest 中登记的 worktree、本地任务分支和任务目录。脏 worktree 或未合并分支默认会阻止删除；确认要丢弃它们时才使用 `--force --execute`。不会删除源仓库、默认分支、远端分支或未登记的用户文件。
 
 ## 任务目录和配置
 
-`taskflow.yaml` 是唯一的持久期望配置。`.taskflow/lock` 只用于进程间互斥，不包含任务状态；state、inventory 和 validation report 不属于当前契约。
+`taskflow.yaml` 是唯一的持久期望配置。`.taskflow/lock` 只用于进程间互斥，`.taskflow/ownership.json` 只记录 Taskflow 创建的资源；它们都不包含任务生命周期状态。state、inventory 和 validation report 不属于当前契约。
 
 ```text
 ~/tasks/REFUND-123/
 ├── taskflow.yaml
 ├── .taskflow/
-│   └── lock
+│   ├── lock
+│   └── ownership.json
 └── worktrees/
     ├── order-service/
     └── payment-sdk/
@@ -124,11 +145,11 @@ execute-mode create 会：
 4. 对新任务通过 atomic write 写入初始 taskflow.yaml；已有任务不重写用户配置；
 5. 只创建缺失的 worktree。
 
-任何 preflight 冲突都会在 Git mutation 前返回。Taskflow 不删除、移动、reset 或覆盖用户已有目录，也不宣称 worktree ownership；结构匹配的手工 worktree 可以被 `open` 使用。
+任何 preflight 冲突都会在 Git mutation 前返回。Taskflow 的 ownership manifest 只记录由 Taskflow 实际创建的 worktree；结构匹配的手工 worktree 可以被 `open` 使用，但不会被 `delete` 清理。
 
 ## 破坏性兼容边界
 
-当前版本只支持 create/open 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。已有任务的 `create --repo` 追加调用也不再支持；请直接编辑 taskflow.yaml。需要使用当前版本时，请重新创建任务目录；新版本不会自动删除旧文件。
+当前版本只支持 create/open/delete 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。已有任务的 `create --repo` 追加调用也不再支持；请直接编辑 taskflow.yaml。没有 ownership.json 的旧任务不能由 `delete` 自动清理。
 
 ## 非目标
 
@@ -136,7 +157,7 @@ execute-mode create 会：
 - AI session lease、对话恢复、模型或权限策略
 - commit、pull、push、PR、merge、release
 - 检查脚本、validation report、状态 daemon 或 Web UI
-- 自动删除、archive 或清理 worktree
+- archive、需求归档或发布流程
 
 ## 开发和验证
 
