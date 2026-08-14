@@ -11,7 +11,7 @@ import (
 
 func TestCreateFlowRunsWithoutOpenSpec(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
-	for _, args := range [][]string{{"init", repo}, {"-C", repo, "config", "user.email", "test@example.com"}, {"-C", repo, "config", "user.name", "Test"}, {"-C", repo, "commit", "--allow-empty", "-m", "init"}} {
+	for _, args := range [][]string{{"init", "-b", "main", repo}, {"-C", repo, "config", "user.email", "test@example.com"}, {"-C", repo, "config", "user.name", "Test"}, {"-C", repo, "commit", "--allow-empty", "-m", "init"}, {"-C", repo, "remote", "add", "origin", "https://example.test/repo.git"}, {"-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"}, {"-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"}} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}

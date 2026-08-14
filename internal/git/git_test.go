@@ -59,3 +59,26 @@ func TestClientInspectsAndCreatesWorktrees(t *testing.T) {
 		t.Fatal("unexpected ref inspection")
 	}
 }
+
+func TestClientDefaultBaseResolvesOriginHead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if out, err := exec.Command("git", "init", "-b", "trunk", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	for _, args := range [][]string{{"-C", root, "config", "user.email", "test@example.com"}, {"-C", root, "config", "user.name", "Test"}, {"-C", root, "commit", "--allow-empty", "-m", "init"}, {"-C", root, "remote", "add", "origin", "https://example.test/repo.git"}, {"-C", root, "update-ref", "refs/remotes/origin/trunk", "HEAD"}, {"-C", root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	client := Client{Runner: execx.OSRunner{}}
+	base, err := client.DefaultBase(context.Background(), root)
+	if err != nil || base != "origin/trunk" {
+		t.Fatalf("base=%q err=%v", base, err)
+	}
+	if out, err := exec.Command("git", "-C", root, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("remove origin/HEAD: %v: %s", err, out)
+	}
+	if _, err := client.DefaultBase(context.Background(), root); err == nil {
+		t.Fatal("expected missing origin/HEAD error")
+	}
+}

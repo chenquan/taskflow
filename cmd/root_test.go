@@ -27,7 +27,7 @@ func TestTasksRootDefaultsToCurrentDirectory(t *testing.T) {
 	t.Chdir(workspace)
 	repo := filepath.Join(workspace, "repo")
 	for _, args := range [][]string{
-		{"init", repo},
+		{"init", "-b", "main", repo},
 		{"-C", repo, "config", "user.email", "test@example.com"},
 		{"-C", repo, "config", "user.name", "Test"},
 		{"-C", repo, "commit", "--allow-empty", "-m", "init"},
