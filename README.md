@@ -12,6 +12,7 @@ Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、�
 - 基于实时 Git 事实的幂等创建和中断后重试
 - 一条 `open` 命令将所有仓库关联到 Codex 或 Claude
 - 基于 ownership manifest 的任务资源 dry-run 和安全清理
+- 将 bundled Taskflow skill 安装到 Codex 或 Claude 的全局或项目级目录
 - 文本和 JSON 输出中的 create/reuse、冲突和 CLI 启动信息
 
 ## 安装
@@ -29,6 +30,31 @@ git clone https://github.com/chenquan/taskflow.git
 cd taskflow
 go build -o taskflow .
 ```
+
+### 安装 Taskflow skill
+
+Taskflow 内置用于指导 Codex 和 Claude 使用 Taskflow 的 skill。默认不指定工具时，同时安装到两个全局目录：
+
+```bash
+taskflow skill install
+```
+
+默认目标是 `$CODEX_HOME/skills`（未设置 `CODEX_HOME` 时为 `~/.codex/skills`）和
+`~/.claude/skills`。使用可重复的 `--tool` 参数可以只选择一个工具，或明确选择多个工具：
+
+```bash
+taskflow skill install --tool codex
+taskflow skill install --tool claude
+taskflow skill install --tool codex --tool claude
+```
+
+如果只希望为当前项目安装，使用 `--project`，并可同时选择工具：
+
+```bash
+taskflow skill install --project --tool claude
+```
+
+项目级安装会写入当前项目的 `.codex/skills` 或 `.claude/skills`。同名 skill 默认会导致安装失败；确认要替换已有目录时才使用 `--force`。需要脚本处理结果时可以附加 `--json`。
 
 ## 快速开始
 
@@ -149,7 +175,7 @@ execute-mode create 会：
 
 ## 破坏性兼容边界
 
-当前版本只支持 create/open/delete 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。已有任务的 `create --repo` 追加调用也不再支持；请直接编辑 taskflow.yaml。没有 ownership.json 的旧任务不能由 `delete` 自动清理。
+当前版本支持 create/open/delete、`skill install` 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。已有任务的 `create --repo` 追加调用也不再支持；请直接编辑 taskflow.yaml。没有 ownership.json 的旧任务不能由 `delete` 自动清理。
 
 ## 非目标
 
@@ -168,7 +194,7 @@ go test -race ./...
 go test ./cmd -run 'TestE2E' -count=1
 ```
 
-项目包含可安装的 bundled Taskflow skill，用于指导 Codex/Claude 使用 create 和 open；Skill 安装属于发布集成，不是任务运行时能力。
+`skill install` 属于发布集成命令，不参与任务工作区的 create/open/delete 生命周期。
 
 ## 许可证
 

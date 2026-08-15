@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/chenquan/taskflow/internal/app"
 	"github.com/chenquan/taskflow/internal/report"
+	"github.com/chenquan/taskflow/skills"
 	"github.com/spf13/cobra"
 )
 
@@ -89,11 +91,93 @@ func NewRootCommand() *cobra.Command {
 	remove.Flags().BoolVar(&deleteExecute, "execute", false, "remove Taskflow-owned worktrees, local branches, and the task directory")
 	remove.Flags().BoolVar(&deleteForce, "force", false, "allow deleting dirty worktrees and unmerged local branches (requires --execute)")
 	root.AddCommand(remove)
+
+	var projectSkills, forceSkills bool
+	var skillTools []string
+	skillCmd := &cobra.Command{Use: "skill", Short: "Install Taskflow skills for AI coding agents"}
+	installSkills := &cobra.Command{Use: "install", Args: cobra.NoArgs, RunE: func(c *cobra.Command, args []string) error {
+		targets, err := skillTargets(skillTools, projectSkills)
+		r := report.New("skill install", "")
+		if err != nil {
+			r.Fail(report.Diagnostic{Code: "SKILL_TARGET_INVALID", Message: err.Error()})
+			return render(c, r, report.ExitConfig)
+		}
+		installed, err := skills.Install(targets, forceSkills)
+		if err != nil {
+			r.Fail(report.Diagnostic{Code: "SKILL_INSTALL_FAILED", Message: err.Error()})
+			return render(c, r, report.ExitExecution)
+		}
+		r.Data = map[string]any{"scope": skillScope(projectSkills), "targets": installed}
+		return render(c, r, report.ExitOK)
+	}}
+	installSkills.Flags().BoolVar(&projectSkills, "project", false, "install into the current project's .codex and .claude directories")
+	installSkills.Flags().BoolVar(&forceSkills, "force", false, "replace existing skills installed under the same names")
+	installSkills.Flags().StringArrayVar(&skillTools, "tool", nil, "install for codex or claude (repeatable; defaults to both)")
+	skillCmd.AddCommand(installSkills)
+	root.AddCommand(skillCmd)
 	return root
 }
 
 func loadDiagnostic(err error) report.Diagnostic {
 	return report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}
+}
+
+func skillTargets(selected []string, project bool) ([]skills.Target, error) {
+	if len(selected) == 0 {
+		selected = []string{"codex", "claude"}
+	}
+	tools := make([]string, 0, len(selected))
+	seen := make(map[string]struct{}, len(selected))
+	for _, tool := range selected {
+		if tool != "codex" && tool != "claude" {
+			return nil, fmt.Errorf("unsupported skill tool %q; choose codex or claude", tool)
+		}
+		if _, ok := seen[tool]; ok {
+			continue
+		}
+		seen[tool] = struct{}{}
+		tools = append(tools, tool)
+	}
+
+	var projectRoot, home, codexHome string
+	if project {
+		var err error
+		projectRoot, err = os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		codexHome = os.Getenv("CODEX_HOME")
+		if codexHome == "" {
+			codexHome = filepath.Join(home, ".codex")
+		}
+	}
+
+	targets := make([]skills.Target, 0, len(tools))
+	for _, tool := range tools {
+		var rootPath string
+		if project {
+			rootPath = filepath.Join(projectRoot, "."+tool, "skills")
+		} else if tool == "codex" {
+			rootPath = filepath.Join(codexHome, "skills")
+		} else {
+			rootPath = filepath.Join(home, ".claude", "skills")
+		}
+		targets = append(targets, skills.Target{Tool: tool, Root: rootPath})
+	}
+	return targets, nil
+}
+
+func skillScope(project bool) string {
+	if project {
+		return "project"
+	}
+	return "global"
 }
 
 type exitError struct{ code int }
