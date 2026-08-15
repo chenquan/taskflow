@@ -97,6 +97,7 @@ func TestSkillTargetsUseToolSpecificGlobalRoots(t *testing.T) {
 	home := t.TempDir()
 	codexHome := filepath.Join(home, "codex-home")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("CODEX_HOME", codexHome)
 
 	targets, err := skillTargets([]string{"codex", "claude"}, false)
@@ -114,6 +115,50 @@ func TestSkillTargetsUseToolSpecificGlobalRoots(t *testing.T) {
 		if targets[i].Root != wantRoot {
 			t.Errorf("target %d root=%q, want %q", i, targets[i].Root, wantRoot)
 		}
+	}
+}
+
+func TestSkillInstallCommandInstallsSelectedProjectTool(t *testing.T) {
+	projectRoot := t.TempDir()
+	t.Chdir(projectRoot)
+	var out bytes.Buffer
+
+	root := NewRootCommand()
+	root.SetOut(&out)
+	root.SetArgs([]string{"skill", "install", "--project", "--tool", "codex"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(projectRoot, ".codex", "skills", "taskflow", "SKILL.md")); err != nil {
+		t.Fatalf("selected Codex skill was not installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(projectRoot, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("unselected Claude target was changed: %v", err)
+	}
+	if !strings.Contains(out.String(), "scope") {
+		t.Fatalf("missing install scope in output: %q", out.String())
+	}
+}
+
+func TestSkillInstallCommandRejectsUnknownTool(t *testing.T) {
+	var out bytes.Buffer
+	root := NewRootCommand()
+	root.SetOut(&out)
+	root.SetArgs([]string{"skill", "install", "--project", "--tool", "windsurf"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("expected invalid tool error")
+	}
+	if !strings.Contains(out.String(), "SKILL_TARGET_INVALID") {
+		t.Fatalf("missing invalid target diagnostic: %q", out.String())
+	}
+}
+
+func TestSkillScope(t *testing.T) {
+	if got := skillScope(true); got != "project" {
+		t.Fatalf("project scope=%q, want project", got)
+	}
+	if got := skillScope(false); got != "global" {
+		t.Fatalf("global scope=%q, want global", got)
 	}
 }
 
