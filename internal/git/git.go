@@ -153,15 +153,35 @@ func (c Client) Worktrees(ctx context.Context, path string) ([]Worktree, error) 
 	flush()
 	return result, nil
 }
-func (c Client) AddWorktree(ctx context.Context, source, branch, target, base string) error {
+func (c Client) AddWorktree(ctx context.Context, source, branch, target, base string, trackBase bool) error {
 	args := []string{"-C", source, "worktree", "add"}
 	if c.HasRef(ctx, source, "refs/heads/"+branch) {
 		args = append(args, target, branch)
 	} else {
-		args = append(args, "-b", branch, target, base)
+		startingPoint := base
+		if !trackBase {
+			commit, err := c.ResolveCommit(ctx, source, base)
+			if err != nil {
+				return err
+			}
+			startingPoint = commit
+		}
+		args = append(args, "-b", branch, target, startingPoint)
 	}
 	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: args})
 	return err
+}
+
+func (c Client) ResolveCommit(ctx context.Context, path, ref string) (string, error) {
+	r, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "rev-parse", "--verify", ref + "^{commit}"}})
+	if err != nil {
+		return "", fmt.Errorf("resolve base %s: %s", ref, strings.TrimSpace(r.Stderr))
+	}
+	commit := strings.TrimSpace(r.Stdout)
+	if commit == "" {
+		return "", fmt.Errorf("resolve base %s: empty commit result", ref)
+	}
+	return commit, nil
 }
 
 func (c Client) RemoveWorktree(ctx context.Context, source, target string, force bool) error {

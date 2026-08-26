@@ -44,7 +44,7 @@ func TestClientInspectsAndCreatesWorktrees(t *testing.T) {
 		}
 	}
 	target := filepath.Join(t.TempDir(), "feature worktree")
-	if err := client.AddWorktree(context.Background(), root, "feature/test", target, "main"); err != nil {
+	if err := client.AddWorktree(context.Background(), root, "feature/test", target, "main", true); err != nil {
 		t.Fatal(err)
 	}
 	worktrees, err := client.Worktrees(context.Background(), root)
@@ -92,5 +92,51 @@ func TestClientDefaultBaseResolvesOriginHead(t *testing.T) {
 	}
 	if _, err := client.DefaultBase(context.Background(), root); err == nil {
 		t.Fatal("expected missing origin/HEAD error")
+	}
+}
+
+func TestClientAddWorktreeDefaultDoesNotTrackRemoteBase(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if out, err := exec.Command("git", "init", "-b", "master", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	for _, args := range [][]string{
+		{"-C", root, "config", "user.email", "test@example.com"},
+		{"-C", root, "config", "user.name", "Test"},
+		{"-C", root, "commit", "--allow-empty", "-m", "init"},
+		{"-C", root, "remote", "add", "origin", "https://example.test/repo.git"},
+		{"-C", root, "update-ref", "refs/remotes/origin/master", "HEAD"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	target := filepath.Join(t.TempDir(), "worktree")
+	client := Client{Runner: execx.OSRunner{}}
+	if err := client.AddWorktree(context.Background(), root, "feature/master-base", target, "origin/master", false); err != nil {
+		t.Fatal(err)
+	}
+	info, err := client.Inspect(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Upstream != "" {
+		t.Fatalf("upstream=%q, want no upstream", info.Upstream)
+	}
+	if info.Head == "" || !client.HasRef(context.Background(), root, "origin/master") {
+		t.Fatalf("worktree did not start from origin/master: info=%#v", info)
+	}
+
+	trackedTarget := filepath.Join(t.TempDir(), "tracked-worktree")
+	if err := client.AddWorktree(context.Background(), root, "feature/explicit-master", trackedTarget, "origin/master", true); err != nil {
+		t.Fatal(err)
+	}
+	trackedInfo, err := client.Inspect(context.Background(), trackedTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trackedInfo.Upstream != "origin/master" {
+		t.Fatalf("explicit upstream=%q, want origin/master", trackedInfo.Upstream)
 	}
 }

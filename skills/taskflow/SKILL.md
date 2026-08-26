@@ -35,7 +35,7 @@ taskflow --json --tasks-root <tasks-root> create <task-id> \
 
 执行会先检查所有 source、base ref、branch 占用、target path 和 worktree identity，再写 taskflow.yaml、ownership.json 或运行 `git worktree add`。它不会删除、移动、reset 或覆盖现有路径；复用的手工 worktree不会获得 ownership。
 
-新声明的仓库默认从 source 的 `origin/HEAD` 解析本地远程默认分支作为 base，并使用 `feature/<task-id>` 作为分支；Taskflow 不会隐式 fetch。若 `origin/HEAD` 缺失或目标引用不可用，先在 source 仓库修复远程引用后再重试。已有 taskflow.yaml 中明确配置的 `base` 和 `branch` 不会被覆盖。
+新声明的仓库默认从 source 的 `origin/HEAD` 解析本地远程默认分支作为 base，并使用 `feature/<task-id>` 作为分支；创建新分支时只使用远程基线的提交作为起点，不建立 upstream 关联。例如 `origin/HEAD` 指向 `origin/main` 时，配置中的 base 是 `origin/main`，但 worktree 分支不会默认关联 `origin/main`；`origin/master` 等其他远程默认分支同理。Taskflow 不会隐式 fetch。若 `origin/HEAD` 缺失或目标引用不可用，先在 source 仓库修复远程引用后再重试。已有 taskflow.yaml 中明确配置的 `base` 和 `branch` 不会被覆盖。
 
 已有任务可以直接重试：
 

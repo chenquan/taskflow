@@ -50,6 +50,7 @@ type DeleteOptions struct {
 type createResolution struct {
 	task                 domain.Task
 	configurationChanged bool
+	trackBase            bool
 }
 
 type deleteAction struct {
@@ -199,7 +200,7 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 			res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
 			return res, report.ExitPartial
 		}
-		if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, target, repository.Base); err != nil {
+		if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, target, repository.Base, resolved.trackBase); err != nil {
 			items[index].Status = "failed"
 			res.Data = createData(resolved.task, items, false)
 			res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
@@ -623,7 +624,7 @@ func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOp
 		if !configurationExists {
 			return createResolution{}, &report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "at least one --repo is required for a new task"}, report.ExitConfig
 		}
-		return createResolution{task: task}, nil, report.ExitOK
+		return createResolution{task: task, trackBase: true}, nil, report.ExitOK
 	}
 	if configurationExists {
 		return createResolution{}, &report.Diagnostic{
@@ -647,7 +648,7 @@ func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOp
 	if err := config.Validate(&task); err != nil {
 		return createResolution{}, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
 	}
-	return createResolution{task: task, configurationChanged: true}, nil, report.ExitOK
+	return createResolution{task: task, configurationChanged: true, trackBase: false}, nil, report.ExitOK
 }
 
 func resolveRepository(taskID, raw string) (domain.Repository, error) {
