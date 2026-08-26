@@ -159,7 +159,7 @@ repositories:
 
 `source` 使用绝对路径，`base` 必须在本地可解析，`worktree` 必须位于任务的 `worktrees/` 目录内。Taskflow 不隐式 fetch；请在 source 仓库准备好 base 后再重试 create。
 
-首次通过 `--repo` 声明仓库时，Taskflow 默认读取该 source 的 `origin/HEAD`，并将其解析到本地可用的远程默认分支作为 base；同时生成 `feature/<task-id>` 分支。`origin/HEAD` 缺失或对应引用不可用时，create 会在写入初始配置或创建 worktree 前失败。已存在配置中的显式 `base` 和 `branch` 保持不变；已有配置的后续修改由用户或 AI 直接编辑 YAML。
+首次通过 `--repo` 声明仓库时，Taskflow 默认读取该 source 的 `origin/HEAD`，并将其解析到本地可用的远程默认分支作为 base；同时生成 `feature/<task-id>` 分支，但只使用该远程分支的提交作为起点，不建立 upstream 关联。例如 `origin/HEAD` 指向 `origin/main` 时，配置中的 base 是 `origin/main`，但生成的 worktree 分支不会默认关联 `origin/main`；`origin/master` 等其他远程默认分支同理。`origin/HEAD` 缺失或对应引用不可用时，create 会在写入初始配置或创建 worktree 前失败。已存在配置中的显式 `base` 和 `branch` 保持不变；已有配置的后续修改由用户或 AI 直接编辑 YAML。
 
 ## 安全边界
 
