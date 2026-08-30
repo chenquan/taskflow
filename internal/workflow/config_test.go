@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const validWorkflowYAML = `version: 1
@@ -149,5 +150,111 @@ func TestLoadWorkflowRejectsTaskMismatchAndMultipleDocuments(t *testing.T) {
 	}
 	if _, _, err := Load(path, "TASK-1"); err == nil || !strings.Contains(err.Error(), "multiple YAML") {
 		t.Fatalf("expected multiple document rejection, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidWorkflowBoundaries(t *testing.T) {
+	if err := Validate(nil, "TASK-1"); err == nil {
+		t.Fatal("expected nil configuration rejection")
+	}
+	cases := map[string]func(*Config){
+		"version":         func(cfg *Config) { cfg.Version++ },
+		"missing task ID": func(cfg *Config) { cfg.Task.ID = "" },
+		"unsafe task ID":  func(cfg *Config) { cfg.Task.ID = "../outside" },
+		"too many stages": func(cfg *Config) { cfg.Stages = make([]Stage, MaxConfiguredStages+1) },
+		"too many checks": func(cfg *Config) { cfg.Checks = make([]Check, MaxConfiguredChecks+1) },
+		"empty stages":    func(cfg *Config) { cfg.Stages = nil },
+		"negative iterations": func(cfg *Config) {
+			cfg.Limits.MaxIterations = -1
+		},
+		"negative duration": func(cfg *Config) {
+			cfg.Limits.MaxDuration = Duration(-time.Second)
+		},
+		"negative usage": func(cfg *Config) {
+			cfg.Limits.MaxUsage = -1
+		},
+		"invalid stage ID": func(cfg *Config) { cfg.Stages[0].ID = "Invalid" },
+		"empty objective":  func(cfg *Config) { cfg.Stages[0].Objective = " " },
+		"invalid attempts": func(cfg *Config) { cfg.Stages[0].MaxAttempts = 0 },
+		"invalid check ID": func(cfg *Config) { cfg.Checks[0].ID = "Invalid" },
+		"duplicate check ID": func(cfg *Config) {
+			cfg.Checks = append(cfg.Checks, cfg.Checks[0])
+		},
+		"empty argv":            func(cfg *Config) { cfg.Checks[0].Argv = nil },
+		"blank argv":            func(cfg *Config) { cfg.Checks[0].Argv = []string{" "} },
+		"negative output limit": func(cfg *Config) { cfg.Checks[0].OutputLimit = -1 },
+		"large output limit":    func(cfg *Config) { cfg.Checks[0].OutputLimit = MaxOutputLimit + 1 },
+		"too many environment values": func(cfg *Config) {
+			cfg.Checks[0].EnvAllowlist = make([]string, MaxConfiguredEnvValues+1)
+		},
+		"invalid allowlist name":   func(cfg *Config) { cfg.Checks[0].EnvAllowlist = []string{"BAD-NAME"} },
+		"duplicate allowlist name": func(cfg *Config) { cfg.Checks[0].EnvAllowlist = []string{"PATH", "PATH"} },
+		"invalid configured name": func(cfg *Config) {
+			cfg.Checks[0].EnvAllowlist = nil
+			cfg.Checks[0].Env = map[string]string{"BAD-NAME": "value"}
+		},
+		"duplicate configured name": func(cfg *Config) {
+			cfg.Checks[0].EnvAllowlist = []string{"PATH"}
+			cfg.Checks[0].Env = map[string]string{"PATH": "value"}
+		},
+		"unknown stage check": func(cfg *Config) { cfg.Stages[0].Checks = []string{"missing"} },
+		"duplicate stage check": func(cfg *Config) {
+			cfg.Stages[0].Checks = []string{"tests", "tests"}
+		},
+		"invalid action policy": func(cfg *Config) { cfg.Policy.ExternalActions = "allow" },
+		"too many actions": func(cfg *Config) {
+			cfg.Policy.AllowedActions = make([]string, MaxConfiguredActions+1)
+		},
+		"invalid action":   func(cfg *Config) { cfg.Policy.AllowedActions = []string{"Invalid"} },
+		"duplicate action": func(cfg *Config) { cfg.Policy.AllowedActions = []string{"deploy", "deploy"} },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := runtimeConfig()
+			mutate(&cfg)
+			if err := Validate(&cfg, "TASK-1"); err == nil {
+				t.Fatal("expected invalid workflow configuration to be rejected")
+			}
+		})
+	}
+}
+
+func TestValidateCheckArgvRejectsSideEffectCommands(t *testing.T) {
+	for _, argv := range [][]string{
+		{"git", "commit"},
+		{"git", "push"},
+		{"git", "pull"},
+		{"git", "fetch"},
+		{"git", "merge"},
+		{"git", "rebase"},
+		{"git", "reset"},
+		{"git", "clean"},
+		{"git", "cherry-pick"},
+		{"git", "revert"},
+		{"git", "remove"},
+		{"git", "add"},
+		{"git", "prune"},
+		{"gh", "pr", "create"},
+		{"gh", "release", "create"},
+		{"curl", "https://example.com"},
+		{"wget", "https://example.com"},
+		{"scp", "source", "target"},
+		{"ssh", "host"},
+		{"rm", "file"},
+		{"rmdir", "directory"},
+	} {
+		if err := validateCheckArgv(argv); err == nil {
+			t.Fatalf("validateCheckArgv(%q) accepted a side-effect command", argv)
+		}
+	}
+	for _, argv := range [][]string{
+		{"git", "status"},
+		{"git", "diff", "--check"},
+		{"gh", "issue", "list"},
+		{"go", "test", "./..."},
+	} {
+		if err := validateCheckArgv(argv); err != nil {
+			t.Fatalf("validateCheckArgv(%q) rejected a read-only check: %v", argv, err)
+		}
 	}
 }

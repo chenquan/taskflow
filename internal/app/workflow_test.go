@@ -557,3 +557,174 @@ func TestWorkflowWithoutConfigurationRemainsWorktreeOnly(t *testing.T) {
 		t.Fatalf("status created workflow runtime: %v", err)
 	}
 }
+
+func TestWorkflowDecisionHelpers(t *testing.T) {
+	now := time.Now().UTC()
+	cfg := workflow.Config{Limits: workflow.Limits{MaxIterations: 2, MaxUsage: 3, MaxDuration: workflow.Duration(time.Minute)}}
+
+	cases := []struct {
+		name     string
+		snapshot workflow.Snapshot
+		want     string
+	}{
+		{name: "iterations", snapshot: workflow.Snapshot{Iteration: 2}, want: "maximum workflow iterations exhausted"},
+		{name: "usage", snapshot: workflow.Snapshot{Usage: 3}, want: "maximum workflow usage exhausted"},
+		{name: "duration", snapshot: workflow.Snapshot{CreatedAt: now.Add(-2 * time.Minute)}, want: "maximum workflow duration exhausted"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if reason, exceeded := budgetExceeded(test.snapshot, cfg, now); !exceeded || reason != test.want {
+				t.Fatalf("budgetExceeded() = %q, %v; want %q, true", reason, exceeded, test.want)
+			}
+		})
+	}
+	if reason, exceeded := budgetExceeded(workflow.Snapshot{}, cfg, now); exceeded || reason != "" {
+		t.Fatalf("zero snapshot unexpectedly exceeded budget: %q, %v", reason, exceeded)
+	}
+	if reason, exceeded := workflowDurationExceeded(workflow.Snapshot{CreatedAt: now.Add(-2 * time.Minute)}, cfg, now); !exceeded || reason == "" {
+		t.Fatalf("duration budget was not detected: %q, %v", reason, exceeded)
+	}
+	if reason, exceeded := workflowDurationExceeded(workflow.Snapshot{}, cfg, now); exceeded || reason != "" {
+		t.Fatalf("zero snapshot unexpectedly exceeded duration: %q, %v", reason, exceeded)
+	}
+	if reason, exceeded := checkpointBudgetExceeded(workflow.Snapshot{Usage: 3}, cfg, workflow.ReportProgress, now); !exceeded || reason == "" {
+		t.Fatalf("progress checkpoint did not use the full budget: %q, %v", reason, exceeded)
+	}
+	if reason, exceeded := checkpointBudgetExceeded(workflow.Snapshot{Usage: 3}, cfg, workflow.ReportReady, now); exceeded || reason != "" {
+		t.Fatalf("ready checkpoint incorrectly used iteration or usage budget: %q, %v", reason, exceeded)
+	}
+
+	if got := workflowOperationID("  operation-1  "); got != "operation-1" {
+		t.Fatalf("workflowOperationID() = %q", got)
+	}
+	if got := workflowOperationID(" \t"); !strings.HasPrefix(got, "operation-") {
+		t.Fatalf("generated operation ID = %q", got)
+	}
+	if err := validateLeaseTTL(-time.Second); err == nil {
+		t.Fatal("negative lease TTL was accepted")
+	}
+	if err := validateLeaseTTL(0); err != nil {
+		t.Fatalf("zero lease TTL was rejected: %v", err)
+	}
+
+	lease := workflow.Lease{TaskID: "TASK-1", OwnerToken: "owner", ExpiresAt: now.Add(time.Minute)}
+	leaseCases := []struct {
+		name    string
+		lease   workflow.Lease
+		owner   string
+		wantErr string
+	}{
+		{name: "foreign task", lease: workflow.Lease{TaskID: "OTHER", OwnerToken: "owner", ExpiresAt: now.Add(time.Minute)}, owner: "owner", wantErr: "LEASE_CONFLICT"},
+		{name: "expired", lease: workflow.Lease{TaskID: "TASK-1", OwnerToken: "owner", ExpiresAt: now}, owner: "owner", wantErr: "STALE_LEASE"},
+		{name: "missing owner", lease: lease, wantErr: "LEASE_CONFLICT"},
+		{name: "wrong owner", lease: lease, owner: "other", wantErr: "LEASE_CONFLICT"},
+		{name: "valid", lease: lease, owner: "owner"},
+	}
+	for _, test := range leaseCases {
+		t.Run("lease/"+test.name, func(t *testing.T) {
+			problem := leaseMatches(test.lease, test.owner, "TASK-1", now)
+			if test.wantErr == "" {
+				if problem != nil {
+					t.Fatalf("leaseMatches() = %#v", problem)
+				}
+				return
+			}
+			if problem == nil || problem.Code != test.wantErr {
+				t.Fatalf("leaseMatches() = %#v; want %s", problem, test.wantErr)
+			}
+		})
+	}
+	if problem := leaseTaskMismatch(lease, false, "OTHER"); problem != nil {
+		t.Fatalf("missing lease unexpectedly mismatched: %#v", problem)
+	}
+	if problem := leaseTaskMismatch(lease, true, "TASK-1"); problem != nil {
+		t.Fatalf("matching lease mismatched: %#v", problem)
+	}
+	if problem := leaseTaskMismatch(workflow.Lease{TaskID: "OTHER"}, true, "TASK-1"); problem == nil || problem.Code != "LEASE_CONFLICT" {
+		t.Fatalf("foreign lease mismatch = %#v", problem)
+	}
+	if !containsAction([]string{"review", "deploy"}, "deploy") || containsAction([]string{"review"}, "deploy") {
+		t.Fatal("containsAction returned an unexpected result")
+	}
+}
+
+func TestReadWorkflowStateAndLeaseErrors(t *testing.T) {
+	root := t.TempDir()
+	store := workflow.NewStore(root)
+	cfg := workflow.Config{
+		Version: workflow.ConfigVersion,
+		Task:    workflow.TaskRef{ID: "TASK-1"},
+		Stages:  []workflow.Stage{{ID: "stage", Objective: "test", MaxAttempts: 1}},
+	}
+	service := New()
+	if snapshot, exists, problem := service.readWorkflowState(store, "TASK-1", cfg, "digest"); problem != nil || exists || snapshot.TaskID != "TASK-1" {
+		t.Fatalf("missing state = %#v, %v, %#v", snapshot, exists, problem)
+	}
+
+	now := time.Now().UTC()
+	other := workflow.NewSnapshot("OTHER", "digest", cfg, now)
+	if err := store.Commit(other, workflow.NewEvent("OTHER", "operation-1", "begin", other, now, nil), workflow.CommitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists, problem := service.readWorkflowState(store, "TASK-1", cfg, "digest"); !exists || problem == nil || problem.Code != "RUNTIME_TASK_MISMATCH" {
+		t.Fatalf("task mismatch = exists:%v problem:%#v", exists, problem)
+	}
+
+	invalid := workflow.NewSnapshot("TASK-1", "digest", cfg, now)
+	invalid.StageID = "unknown"
+	if err := store.Commit(invalid, workflow.NewEvent("TASK-1", "operation-2", "state", invalid, now, nil), workflow.CommitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists, problem := service.readWorkflowState(store, "TASK-1", cfg, "digest"); !exists || problem == nil || problem.Code != "RUNTIME_CORRUPT" {
+		t.Fatalf("invalid configured state = exists:%v problem:%#v", exists, problem)
+	}
+
+	if err := os.WriteFile(store.Paths.State, []byte("{"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists, problem := service.readWorkflowState(store, "TASK-1", cfg, "digest"); exists || problem == nil || problem.Code != "RUNTIME_CORRUPT" {
+		t.Fatalf("corrupt state = exists:%v problem:%#v", exists, problem)
+	}
+
+	if lease, exists, problem := service.readLease(store); problem != nil || exists || lease.TaskID != "" {
+		t.Fatalf("missing lease = %#v, %v, %#v", lease, exists, problem)
+	}
+	if err := os.WriteFile(store.Paths.Lease, []byte("{"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists, problem := service.readLease(store); exists || problem == nil || problem.Code != "RUNTIME_CORRUPT" {
+		t.Fatalf("corrupt lease = exists:%v problem:%#v", exists, problem)
+	}
+}
+
+func TestReadReportFileEnforcesTaskRootAndSize(t *testing.T) {
+	root := t.TempDir()
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(root, "report.json")
+	if err := os.WriteFile(inside, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := readReportFile(canonicalRoot, inside); err != nil || string(raw) != "{}" {
+		t.Fatalf("readReportFile() = %q, %v", raw, err)
+	}
+	if _, err := readReportFile(canonicalRoot, filepath.Join(root, "missing.json")); err == nil {
+		t.Fatal("missing report was accepted")
+	}
+	outside := filepath.Join(t.TempDir(), "report.json")
+	if err := os.WriteFile(outside, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readReportFile(canonicalRoot, outside); err == nil {
+		t.Fatal("report outside task root was accepted")
+	}
+	large := filepath.Join(root, "large.json")
+	if err := os.WriteFile(large, make([]byte, workflow.MaxReportBytes+1), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readReportFile(canonicalRoot, large); err == nil {
+		t.Fatal("oversized report was accepted")
+	}
+}
