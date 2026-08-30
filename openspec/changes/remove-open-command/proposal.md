@@ -6,7 +6,7 @@ The `open` command was designed as a fast path to launch Codex or Claude from a 
 
 - **BREAKING** Remove the `taskflow open` CLI command, its `--tool` flag, and the `TOOL_NOT_FOUND`/`TOOL_EXITED` diagnostics.
 - **BREAKING** Remove `Service.Open`, `preflightOpen`, and the `internal/devtool` package; Taskflow no longer builds, validates, or execs tool launch specifications.
-- Rewrite the bundled skill's "打开 CLI" guidance: after `create --dry-run` confirms every repository reports `reuse`, the agent reads `taskflow.yaml`, composes the native command line (first repository worktree as cwd, `--add-dir` for later worktrees and the task root, `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` for Claude, absolute paths), and presents it for the user to execute.
+- Rewrite the bundled skill's "打开 CLI" guidance: for a new task, preview with `--repo`, obtain approval, execute create, then run a no-`--repo` `create --dry-run`; after every repository reports `reuse`, the agent reads `taskflow.yaml`, composes a shell-appropriate native command line (first repository worktree as cwd, `--add-dir` for later worktrees and the task root, `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` for Claude, safely quoted absolute paths), and presents it for the user to execute.
 - Keep the `--worktree`/`--worktree=...` warning as skill-level guidance only; there is no runtime enforcement after removal.
 - Update README and the skill content test to match the new guidance.
 
@@ -19,7 +19,8 @@ None.
 ### Modified Capabilities
 
 - `development-tool-sessions`: Rewrite from "CLI builds and execs launch specifications" to "the skill composes native `claude`/`codex` command lines for the user to run"; remove CLI launch, PATH resolution, env injection, and argument-filtering requirements.
-- `taskflow-multirepo-skill`: Replace `taskflow open` invocations with native command-line generation guidance gated on `create --dry-run` reuse status.
+- `taskflow-multirepo-skill`: Replace `taskflow open` invocations with native command-line generation guidance gated on the post-create no-`--repo` `create --dry-run` reuse status.
+- `readiness-and-initialization-integrity`: Remove the Open source-identity requirement while retaining the create non-bare-source preflight.
 - `cli-output-contract`: Supported operational commands become create and delete.
 - `e2e-command-flow`: Remove open preflight and binary open scenarios; keep create/delete coverage.
 - `reporting-validation-readiness`: Operational result reporting covers create and delete only.

@@ -73,10 +73,13 @@ taskflow --tasks-root ~/tasks create REFUND-123 \
   --repo payment-sdk=~/projects/payment-sdk \
   --execute
 
-# bundled skill 在 create --dry-run 确认所有 worktree 为 reuse 后，生成并展示原生命令
-cd /Users/me/tasks/REFUND-123/worktrees/order-service
-codex --add-dir /Users/me/tasks/REFUND-123/worktrees/payment-sdk \
-  --add-dir /Users/me/tasks/REFUND-123 --model gpt-5
+# execute 完成后，bundled skill 必须再次确认所有 worktree 为 reuse
+taskflow --tasks-root ~/tasks create REFUND-123 --dry-run
+
+# 确认上一步所有 action 都是 reuse 后，生成并展示原生命令
+cd '/Users/me/tasks/REFUND-123/worktrees/order-service'
+codex --add-dir '/Users/me/tasks/REFUND-123/worktrees/payment-sdk' \
+  --add-dir '/Users/me/tasks/REFUND-123' --model gpt-5
 
 taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks delete REFUND-123 --execute
@@ -84,7 +87,7 @@ taskflow --tasks-root ~/tasks delete REFUND-123 --execute
 
 `create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、worktree、分支或锁目录；新任务的 execute 会在完整 preflight 后写入初始配置并创建缺失的 worktree。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
 
-bundled skill 先运行 `taskflow create <task-id> --dry-run`，只有所有 repository 都报告 `reuse` 时才生成命令。它使用第一个 worktree 作为 cwd，将后续 worktree 和任务根目录作为绝对路径 `--add-dir` 参数；Claude 命令带有 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` 前缀。命令由用户在自己的终端执行，匹配但 dirty 的 worktree 不会阻止生成。不要加入 `--worktree` 或 `--worktree=...`，避免嵌套 worktree。
+新任务先用带 `--repo` 的 dry-run 预览，用户批准后执行 create；execute 完成后，bundled skill 必须再次运行不带 `--repo` 的 `taskflow create <task-id> --dry-run`，只有所有 repository 都报告 `reuse` 时才生成命令。已有任务也从这次不带 `--repo` 的 dry-run 开始。它使用第一个 worktree 作为 cwd，将后续 worktree 和任务根目录作为绝对路径 `--add-dir` 参数，并按用户目标 shell 进行安全引用和转义：POSIX shell 使用单引号，PowerShell 使用 `Set-Location -LiteralPath` 和 `$env:...`，cmd.exe 使用 `cd /d "..."` 和 `set "...=1"`。复杂 cmd 路径无法可靠转义时改用 PowerShell。命令由用户在自己的终端执行，匹配但 dirty 的 worktree 不会阻止生成。不要加入 `--worktree` 或 `--worktree=...`，避免嵌套 worktree。
 
 ## 重试和修改配置
 

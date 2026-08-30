@@ -14,9 +14,9 @@
 
 ## 3. Rewrite the skill guidance
 
-- [x] 3.1 Rewrite the "打开 CLI" chapter of `skills/taskflow/SKILL.md`: gate on `create --dry-run` reporting every repository as `reuse`, then compose the native `claude`/`codex` command (first worktree as cwd, absolute `--add-dir` paths for later worktrees and the task root, `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` prefix for Claude) and present it for the user to run; keep the `--worktree` warning
+- [x] 3.1 Rewrite the "打开 CLI" chapter of `skills/taskflow/SKILL.md`: after new-task create execute, gate on the no-`--repo` `create --dry-run` reporting every repository as `reuse`, then compose shell-appropriate native `claude`/`codex` commands with safely quoted absolute paths (first worktree as cwd, `--add-dir` paths for later worktrees and the task root, `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` prefix for Claude) and present them for the user to run; keep the `--worktree` warning
 - [x] 3.2 Remove open references from the SKILL.md intro, the taskflow.yaml note, and the `TOOL_NOT_FOUND` entry in the failure list
-- [x] 3.3 Update `skills/skill_content_test.go`: replace the `"open <task-id>"` assertion with assertions for the composed native commands and the dry-run reuse gate
+- [x] 3.3 Update `skills/skill_content_test.go`: replace the `"open <task-id>"` assertion with assertions for the composed native commands, shell-specific quoting, and the post-execute dry-run reuse gate
 
 ## 4. Update documentation
 

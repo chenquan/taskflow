@@ -76,35 +76,50 @@ delete 要求 ownership manifest 与 taskflow.yaml 完全匹配，并会在任�
 
 ## 生成 AI CLI 命令
 
-只有所有目标 worktree 的 source common directory、branch 和 path 都匹配时才生成命令。先运行 dry-run：
+只有所有目标 worktree 的 source common directory、branch 和 path 都匹配时才生成命令。新任务要按以下顺序处理：
+
+1. 先用带 `--repo` 的 `create --dry-run` 预览，向用户说明计划并获得执行批准。
+2. 用户批准后运行带 `--repo` 的 `create --execute` 创建工作区。
+3. execute 完成后，必须再次运行不带 `--repo` 的 dry-run：
+
+   ```bash
+   taskflow --json --tasks-root <tasks-root> create <task-id> --dry-run
+   ```
+
+只有这次输出中每个 repository 的 action 都是 `reuse` 时才继续。若有 `create` 或冲突，先向用户报告问题，不生成 AI CLI 命令。已有任务也必须先运行这个不带 `--repo` 的 dry-run。匹配但 dirty 的 worktree 仍然可以复用。
+
+然后读取 `taskflow.yaml`，使用绝对路径组合命令：第一个 repository 的 worktree 是 cwd，后续 repository worktree 和任务根目录都作为 `--add-dir` 参数。先识别用户要执行命令的 shell；不能判断时先询问，不要假定所有用户都使用 Bash。每个路径都必须按目标 shell 进行引用和转义，不能把原始路径直接插入命令：
+
+- POSIX shell（sh、bash、zsh）使用单引号；路径中的单引号使用 `'\''` 形式（例如 `'/tmp/a'\''b'`）。Claude 使用 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 claude ...` 前缀。
+- PowerShell 使用单引号，路径中的单引号写成两个单引号，并使用 `Set-Location -LiteralPath`；Claude 通过 `$env:CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1'` 设置环境变量。
+- cmd.exe 使用双引号包住每个路径，使用 `cd /d "..."` 和 `set "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"`；对 cmd 元字符进行转义。路径含 `%`、`!` 或无法可靠转义时，改为生成 PowerShell 命令或先询问用户。
+
+POSIX shell 示例：
 
 ```bash
-taskflow --json --tasks-root <tasks-root> create <task-id> --dry-run
-```
-
-检查输出，只有每个 repository 的 action 都是 `reuse` 时才继续。若有 `create` 或冲突，先向用户报告问题，不生成 AI CLI 命令。匹配但 dirty 的 worktree 仍然可以复用。
-
-然后读取 `taskflow.yaml`，使用绝对路径组合命令：第一个 repository 的 worktree 是 cwd，后续 repository worktree 和任务根目录都作为 `--add-dir` 参数。把完整命令展示给用户，由用户在自己的终端执行；不要由 agent shell 代为启动交互式工具。
-
-Claude 示例：
-
-```bash
-cd <absolute-task-root>/<first-worktree>
+cd '<absolute-task-root>/<first-worktree>'
 CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 claude \
-  --add-dir <absolute-later-worktree> \
-  --add-dir <absolute-task-root>
+  --add-dir '<absolute-later-worktree>' \
+  --add-dir '<absolute-task-root>'
 ```
 
-Codex 示例：
+PowerShell 示例：
 
-```bash
-cd <absolute-task-root>/<first-worktree>
-codex \
-  --add-dir <absolute-later-worktree> \
-  --add-dir <absolute-task-root>
+```powershell
+Set-Location -LiteralPath '<absolute-task-root>\<first-worktree>'
+$env:CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1'
+claude --add-dir '<absolute-later-worktree>' --add-dir '<absolute-task-root>'
 ```
 
-用户请求的其他工具参数原样追加在这些 `--add-dir` 参数之后。不要加入 `--worktree` 或 `--worktree=...`，避免创建嵌套 worktree；如用户请求这些参数，应省略或拒绝并说明原因。
+cmd.exe 示例：
+
+```bat
+cd /d "<absolute-task-root>\<first-worktree>"
+set "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"
+claude --add-dir "<absolute-later-worktree>" --add-dir "<absolute-task-root>"
+```
+
+Codex 使用相同的 cwd、路径引用和 `--add-dir` 参数，只需将工具名替换为 `codex` 并移除 Claude 环境变量。把用户请求的其他工具参数按目标 shell 正确引用后追加在这些 `--add-dir` 参数之后。把完整的、与 shell 匹配的命令展示给用户，由用户在自己的终端执行；不要由 agent shell 代为启动交互式工具。不要加入 `--worktree` 或 `--worktree=...`，避免创建嵌套 worktree；如用户请求这些参数，应省略或拒绝并说明原因。
 
 ## 失败处理
 
