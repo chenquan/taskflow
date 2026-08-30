@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestTaskflowSkillGuidesCreateOpenAndDelete(t *testing.T) {
+func TestTaskflowSkillGuidesCreateNativeToolsAndDelete(t *testing.T) {
 	content, err := Files.ReadFile("taskflow/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
@@ -14,7 +14,6 @@ func TestTaskflowSkillGuidesCreateOpenAndDelete(t *testing.T) {
 	for _, required := range []string{
 		"create <task-id>",
 		"create <task-id> --execute",
-		"open <task-id>",
 		"delete <task-id>",
 		"ownership.json",
 		"OWNERSHIP_NOT_FOUND",
@@ -25,6 +24,13 @@ func TestTaskflowSkillGuidesCreateOpenAndDelete(t *testing.T) {
 		"CREATE_WORKTREE_FAILED",
 		"CONFIG_EDIT_REQUIRED",
 		"直接编辑 taskflow.yaml",
+		"create --dry-run",
+		"reuse",
+		"claude",
+		"codex",
+		"--add-dir",
+		"CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1",
+		"绝对路径",
 		"--worktree",
 		"dirty",
 	} {
@@ -41,6 +47,9 @@ func TestTaskflowSkillGuidesCreateOpenAndDelete(t *testing.T) {
 		"STATE_CONFLICT",
 		"depends_on",
 		"repo add",
+		"open <task-id>",
+		"TOOL_NOT_FOUND",
+		"TOOL_EXITED",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("skill contains retired guidance %q", forbidden)

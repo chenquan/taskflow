@@ -28,11 +28,9 @@ type Result struct {
 }
 type Runner interface {
 	Run(context.Context, CommandSpec) (Result, error)
-	LookPath(string) (string, error)
 }
 type OSRunner struct{}
 
-func (OSRunner) LookPath(name string) (string, error) { return exec.LookPath(name) }
 func (OSRunner) Run(ctx context.Context, s CommandSpec) (Result, error) {
 	if s.Timeout > 0 {
 		var cancel context.CancelFunc

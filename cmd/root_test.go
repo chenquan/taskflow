@@ -162,18 +162,18 @@ func TestSkillScope(t *testing.T) {
 	}
 }
 
-func TestPublicCommandsAreLimitedToCreateOpenVersionAndSkill(t *testing.T) {
+func TestPublicCommandsAreLimitedToCreateDeleteVersionAndSkill(t *testing.T) {
 	root := NewRootCommand()
 	seen := map[string]bool{}
 	for _, command := range root.Commands() {
 		seen[command.Name()] = true
 	}
-	for _, name := range []string{"create", "open", "version", "skill"} {
+	for _, name := range []string{"create", "delete", "version", "skill"} {
 		if !seen[name] {
 			t.Fatalf("missing public command %s", name)
 		}
 	}
-	for _, name := range []string{"init", "start", "status", "validate", "repo"} {
+	for _, name := range []string{"init", "start", "status", "validate", "repo", "open"} {
 		if seen[name] {
 			t.Fatalf("retired command still registered: %s", name)
 		}

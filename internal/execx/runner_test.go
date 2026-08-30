@@ -90,12 +90,3 @@ func TestMergeEnvironmentOverridesDuplicateKeys(t *testing.T) {
 		t.Fatalf("windows=%v", windows)
 	}
 }
-
-func TestLookPath(t *testing.T) {
-	if path, err := (OSRunner{}).LookPath("go"); err != nil || path == "" {
-		t.Fatalf("go path=%q err=%v", path, err)
-	}
-	if _, err := (OSRunner{}).LookPath("taskflow-command-that-does-not-exist"); err == nil {
-		t.Fatal("expected missing executable error")
-	}
-}
