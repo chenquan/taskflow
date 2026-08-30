@@ -82,3 +82,38 @@ func TestTaskflowSkillMetadataMatchesTheGuidance(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskflowWorkflowSkillUsesStateGatedBoundedIterations(t *testing.T) {
+	content, err := Files.ReadFile("taskflow-workflow/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, required := range []string{
+		"workflow status",
+		"workflow begin",
+		"workflow checkpoint",
+		"workflow verify",
+		"--json",
+		"completed",
+		"awaiting_approval",
+		"needs_attention",
+		"unknown",
+		"/loop",
+		"codex",
+		"claude",
+		"不启动嵌套",
+		"commit",
+		"push",
+		"owner-token",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("workflow skill is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"taskflow workflow commit", "taskflow workflow push", "codex --", "claude --"} {
+		if strings.Contains(text, forbidden) {
+			t.Errorf("workflow skill contains forbidden command guidance %q", forbidden)
+		}
+	}
+}

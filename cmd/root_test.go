@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/chenquan/taskflow/internal/report"
 )
 
 func TestVersionUsesCobraCommand(t *testing.T) {
@@ -159,6 +162,41 @@ func TestSkillScope(t *testing.T) {
 	}
 	if got := skillScope(false); got != "global" {
 		t.Fatalf("global scope=%q, want global", got)
+	}
+}
+
+func TestJSONArgumentFailuresRemainMachineReadable(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "missing positional argument", args: []string{"--json", "workflow", "status"}},
+		{name: "unknown flag", args: []string{"--json", "workflow", "status", "TASK-1", "--not-a-flag"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			root := NewRootCommand()
+			root.SetOut(&output)
+			root.SetErr(&output)
+			root.SetArgs(tt.args)
+			if err := root.Execute(); err == nil {
+				t.Fatal("expected argument failure")
+			}
+			var envelope struct {
+				OK     bool                `json:"ok"`
+				Errors []report.Diagnostic `json:"errors"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+				t.Fatalf("argument failure is not JSON: %v: %s", err, output.String())
+			}
+			if envelope.OK || len(envelope.Errors) != 1 || envelope.Errors[0].Code != "INVALID_ARGUMENT" {
+				t.Fatalf("unexpected argument envelope: %#v", envelope)
+			}
+			if strings.Contains(output.String(), "Error:") {
+				t.Fatalf("Cobra text leaked into JSON output: %s", output.String())
+			}
+		})
 	}
 }
 

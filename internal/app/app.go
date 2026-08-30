@@ -508,7 +508,7 @@ func validateDeleteDirectory(taskRoot string, targets []string) error {
 	}
 	for _, entry := range entries {
 		switch entry.Name() {
-		case "taskflow.yaml", ".taskflow", "worktrees":
+		case "taskflow.yaml", "workflow.yaml", ".taskflow", "worktrees":
 		default:
 			return fmt.Errorf("task directory contains unmanaged entry %q", entry.Name())
 		}
@@ -542,7 +542,22 @@ func removeTaskDirectory(taskRoot string, targets []string) error {
 	if err := removeIfExists(filepath.Join(taskRoot, "taskflow.yaml")); err != nil {
 		return err
 	}
+	if err := removeIfExists(filepath.Join(taskRoot, "workflow.yaml")); err != nil {
+		return err
+	}
 	if err := removeIfExists(ownership.Path(taskRoot)); err != nil {
+		return err
+	}
+	for _, path := range []string{
+		filepath.Join(taskRoot, ".taskflow", "workflow-state.json"),
+		filepath.Join(taskRoot, ".taskflow", "workflow-events.jsonl"),
+		filepath.Join(taskRoot, ".taskflow", "workflow-lease.json"),
+	} {
+		if err := removeIfExists(path); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(taskRoot, ".taskflow", "workflow")); err != nil {
 		return err
 	}
 	directories := map[string]bool{}
@@ -718,7 +733,9 @@ func rejectLegacyRuntime(taskRoot string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name() != "lock" && entry.Name() != "ownership.json" {
+		switch entry.Name() {
+		case "lock", "ownership.json", "workflow-state.json", "workflow-events.jsonl", "workflow-lease.json", "workflow":
+		default:
 			return fmt.Errorf("legacy runtime artifact %q exists; recreate the task workspace", filepath.Join(".taskflow", entry.Name()))
 		}
 	}
