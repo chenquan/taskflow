@@ -12,7 +12,7 @@ import (
 
 // Files contains the complete built-in skill directories.
 //
-//go:embed all:taskflow
+//go:embed all:taskflow all:taskflow-workflow
 var Files embed.FS
 
 type Target struct {

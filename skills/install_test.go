@@ -20,7 +20,7 @@ func TestInstallCreatesEverySkillForBothTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result) != len(targets) || len(names) != 1 || names[0] != "taskflow" {
+	if len(result) != len(targets) || len(names) != 2 || names[0] != "taskflow" || names[1] != "taskflow-workflow" {
 		t.Fatalf("unexpected install result %#v, names %#v", result, names)
 	}
 	for _, target := range targets {

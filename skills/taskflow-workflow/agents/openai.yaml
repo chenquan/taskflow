@@ -1,0 +1,4 @@
+interface:
+  display_name: "Taskflow 会话工作流"
+  short_description: "在 Codex 或 Claude 会话中驱动可恢复的有界 AI 工作流"
+  default_prompt: "使用 $taskflow-workflow 读取 workflow 状态，只推进一个有界迭代，并通过 Taskflow CLI 完成 checkpoint 和机器校验。"

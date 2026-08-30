@@ -121,6 +121,12 @@ claude --add-dir "<absolute-later-worktree>" --add-dir "<absolute-task-root>"
 
 Codex 使用相同的 cwd、路径引用和 `--add-dir` 参数，只需将工具名替换为 `codex` 并移除 Claude 环境变量。把用户请求的其他工具参数按目标 shell 正确引用后追加在这些 `--add-dir` 参数之后。把完整的、与 shell 匹配的命令展示给用户，由用户在自己的终端执行；不要由 agent shell 代为启动交互式工具。不要加入 `--worktree` 或 `--worktree=...`，避免创建嵌套 worktree；如用户请求这些参数，应省略或拒绝并说明原因。
 
+## 可选的会话工作流
+
+本 Skill 只负责准备 worktree 和生成启动命令。若任务目录中另外存在 `workflow.yaml`，用户可以在已经启动的 Codex 或 Claude 会话中调用全局 `taskflow-workflow` Skill，并由宿主的 `/loop` 驱动后续有界迭代。两个 Skill 的职责不同：本 Skill 不记录阶段进度，也不替代 workflow Skill 的状态、checkpoint 或机器校验流程。
+
+工作流 Skill 会再次检查 worktree identity；如果配置、worktree 或 ownership 不满足条件，应先修复本 Skill 报告的诊断，再开始会话工作流。没有 `workflow.yaml` 的任务继续按本 Skill 的普通 worktree 流程使用。
+
 ## 失败处理
 
 优先使用 JSON 输出，读取 `code`、`repo` 和 `message`，再采取最小修复：

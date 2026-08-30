@@ -15,6 +15,7 @@ type CommandSpec struct {
 	Args       []string
 	Dir        string
 	Timeout    time.Duration
+	ClearEnv   bool
 	Stdin      io.Reader
 	Stdout     io.Writer
 	Stderr     io.Writer
@@ -40,7 +41,9 @@ func (OSRunner) Run(ctx context.Context, s CommandSpec) (Result, error) {
 	c := exec.CommandContext(ctx, s.Executable, s.Args...)
 	c.Dir = s.Dir
 	c.Stdin, c.Stdout, c.Stderr = s.Stdin, s.Stdout, s.Stderr
-	if len(s.Env) > 0 {
+	if s.ClearEnv {
+		c.Env = append([]string{}, s.Env...)
+	} else if len(s.Env) > 0 {
 		c.Env = mergeEnvironment(os.Environ(), s.Env, runtime.GOOS == "windows")
 	}
 	if s.Stdin != nil || s.Stdout != nil || s.Stderr != nil {

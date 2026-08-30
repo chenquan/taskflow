@@ -181,12 +181,53 @@ execute-mode create 会：
 
 当前版本支持 create/delete、`skill install` 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。已有任务的 `create --repo` 追加调用也不再支持；请直接编辑 taskflow.yaml。没有 ownership.json 的旧任务不能由 `delete` 自动清理。
 
+## 会话驱动的 AI 工作流
+
+在准备好任务 worktree 后，可以为任务增加独立的 `workflow.yaml`，让 Codex 或 Claude 会话通过全局 `taskflow-workflow` Skill 和宿主 `/loop` 按阶段持续推进。`taskflow.yaml` 仍然只描述 Git worktree；`workflow.yaml` 描述阶段目标、检查命令、重试次数、预算和审批策略。
+
+示例配置见 [`examples/workflow.yaml`](examples/workflow.yaml)。工作流命令使用结构化 JSON 作为 Skill 的控制协议：
+
+```bash
+taskflow --json --tasks-root ~/tasks workflow validate DEMO-001
+taskflow --json --tasks-root ~/tasks workflow status DEMO-001
+```
+
+用户在任务 worktree 中启动 Agent，而不是让 Taskflow 启动嵌套 Agent：
+
+```bash
+cd ~/tasks/DEMO-001/worktrees/service
+codex
+# 或 claude
+```
+
+在会话中调用全局 `taskflow-workflow` Skill，然后使用宿主的 `/loop`。每个 tick 只执行一个有界迭代：读取状态、开始或恢复一个 attempt、修改代码、提交结构化 checkpoint，并执行配置中的机器检查。Skill 必须在 `completed`、`paused`、`awaiting_approval`、`needs_attention`、`cancelled` 或 `unknown` 状态停止工作。
+
+用户可以在会话外进行显式控制：
+
+```bash
+taskflow --json --tasks-root ~/tasks workflow pause DEMO-001
+taskflow --json --tasks-root ~/tasks workflow resume DEMO-001
+taskflow --json --tasks-root ~/tasks workflow approve DEMO-001 <approval-id>
+taskflow --json --tasks-root ~/tasks workflow cancel DEMO-001
+```
+
+运行时状态和证据保存在任务目录的 `.taskflow/` 下，包括 workflow snapshot、JSONL 事件、session lease、attempt 报告和检查结果。工作流只有在所有 required checks 成功后才会进入 `completed`；`needs_approval` 只有在策略允许且 action 被列入 `allowed_actions`（如果配置了）时才会建立审批请求。commit、push、PR、merge、release、deploy、删除和外部写入仍由用户单独授权并执行。
+
+### 会话工作流边界
+
+- `/loop` 是当前 Codex 或 Claude 会话的触发器，不是后台 daemon；关闭会话后不会继续产生新的迭代，但状态可以在下一次会话恢复。
+- 每个任务 v1 只允许一个 active attempt，阶段按 `workflow.yaml` 声明顺序串行执行，不支持并行 Agent 或 DAG。
+- Skill 指令不能拦截通用 Agent 直接发起的任意 shell 命令；需要强制的命令级审批时，应增加代理、hook、sandbox 或 App Server 层。
+
+没有 `workflow.yaml` 的现有任务继续是普通的 worktree-only Taskflow 任务；workflow 命令不会修改旧的 `taskflow.yaml` 或自动迁移旧运行时文件。
+
 ## 非目标
 
 - 需求、规格、角色、契约负责人或项目进度管理
-- AI session lease、对话恢复、模型或权限策略
-- commit、pull、push、PR、merge、release
-- 检查脚本、validation report、状态 daemon 或 Web UI
+- 启动、嵌入或监督 Codex/Claude Agent 进程
+- 后台 workflow daemon、App Server、Web UI 或远程执行
+- 任意 DAG、并行阶段或多 Agent 协调
+- 自动 commit、pull、push、PR、merge、release、deploy 或外部写入
 - archive、需求归档或发布流程
 
 ## 开发和验证
