@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -46,7 +45,7 @@ func runE2E(t *testing.T, tasks string, args ...string) (string, error) {
 	return output.String(), err
 }
 
-func TestE2ECreateJSONAndOpenCLI(t *testing.T) {
+func TestE2ECreateJSONAndReuseDirtyWorktree(t *testing.T) {
 	repo1, repo2 := e2eGitRepo(t), e2eGitRepo(t)
 	tasks := t.TempDir()
 	preview, err := runE2E(t, tasks, "--json", "create", "FLOW", "--repo", "one="+repo1, "--repo", "two="+repo2, "--dry-run")
@@ -69,18 +68,28 @@ func TestE2ECreateJSONAndOpenCLI(t *testing.T) {
 			t.Fatalf("legacy file exists %s: %v", name, err)
 		}
 	}
-	toolDir := t.TempDir()
-	toolName, toolContents := "codex", []byte("#!/bin/sh\nexit 0\n")
-	if runtime.GOOS == "windows" {
-		toolName, toolContents = "codex.cmd", []byte("@echo off\r\nexit /b 0\r\n")
-	}
-	tool := filepath.Join(toolDir, toolName)
-	if err := os.WriteFile(tool, toolContents, 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "worktrees", "one", "dirty.txt"), []byte("dirty"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if output, err := runE2E(t, tasks, "--json", "open", "FLOW", "--tool", "codex", "--", "--model", "test"); err != nil {
-		t.Fatalf("open: %v: %s", err, output)
+	reuseOutput, err := runE2E(t, tasks, "--json", "create", "FLOW", "--dry-run")
+	if err != nil {
+		t.Fatalf("reuse dry-run: %v: %s", err, reuseOutput)
+	}
+	var reuse resultEnvelope
+	if err := json.Unmarshal([]byte(reuseOutput), &reuse); err != nil || !reuse.OK {
+		t.Fatalf("reuse dry-run JSON: %v %s", err, reuseOutput)
+	}
+	var reuseData struct {
+		Actions []struct {
+			Repo   string `json:"repo"`
+			Status string `json:"status"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal(reuse.Data, &reuseData); err != nil {
+		t.Fatalf("reuse data: %v", err)
+	}
+	if len(reuseData.Actions) != 2 || reuseData.Actions[0].Repo != "one" || reuseData.Actions[0].Status != "reuse" || reuseData.Actions[1].Repo != "two" || reuseData.Actions[1].Status != "reuse" {
+		t.Fatalf("reuse actions: %#v", reuseData.Actions)
 	}
 	if _, err := runE2E(t, tasks, "--json", "create", "FLOW", "--execute"); err != nil {
 		t.Fatalf("repeat create: %v", err)

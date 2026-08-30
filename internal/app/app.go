@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/chenquan/taskflow/internal/config"
-	"github.com/chenquan/taskflow/internal/devtool"
 	"github.com/chenquan/taskflow/internal/domain"
 	"github.com/chenquan/taskflow/internal/execx"
 	"github.com/chenquan/taskflow/internal/fsx"
@@ -840,52 +838,4 @@ func samePath(a, b string) bool {
 	}
 	bb, err := filepath.Abs(b)
 	return err == nil && filepath.Clean(aa) == filepath.Clean(bb)
-}
-
-func (s Service) Open(ctx context.Context, t domain.Task, tool string, extraArgs []string, stdin io.Reader, stdout, stderr io.Writer) (report.Result, report.ExitCode) {
-	r := report.New("open", t.Task.ID)
-	if tool == "" {
-		tool = "codex"
-	}
-	if diagnostic, code := s.preflightOpen(ctx, t); diagnostic != nil {
-		r.Fail(*diagnostic)
-		return r, code
-	}
-	spec, err := devtool.AdapterImpl{Tool: tool}.Build(t, extraArgs)
-	if err != nil {
-		r.Fail(report.Diagnostic{Code: "INVALID_ARGUMENT", Message: err.Error()})
-		return r, report.ExitConfig
-	}
-	resolved, err := s.Runner.LookPath(spec.Executable)
-	if err != nil || strings.TrimSpace(resolved) == "" {
-		r.Fail(report.Diagnostic{Code: "TOOL_NOT_FOUND", Message: fmt.Sprintf("%s executable was not found in PATH", tool)})
-		return r, report.ExitEnvironment
-	}
-	spec.Executable = resolved
-	child, err := s.Runner.Run(ctx, execx.CommandSpec{Executable: spec.Executable, Args: spec.Args, Dir: spec.Dir, Stdin: stdin, Stdout: stdout, Stderr: stderr, Env: spec.Env})
-	if err != nil {
-		r.Data = map[string]any{"tool": tool, "executable": spec.Executable, "childExitCode": child.ExitCode}
-		r.Fail(report.Diagnostic{Code: "TOOL_EXITED", Message: fmt.Sprintf("%s exited with code %d", tool, child.ExitCode)})
-		return r, report.ExitExecution
-	}
-	r.Data = spec
-	return r, report.ExitOK
-}
-
-func (s Service) preflightOpen(ctx context.Context, task domain.Task) (*report.Diagnostic, report.ExitCode) {
-	for _, repository := range task.Repositories {
-		sourceInfo, err := s.Git.Inspect(ctx, repository.Source)
-		if err != nil || sourceInfo.CommonDir == "" {
-			return &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: gitErrorMessage("inspect configured source", err)}, report.ExitEnvironment
-		}
-		target := filepath.Join(task.Task.Root, repository.Worktree)
-		targetInfo, err := s.Git.Inspect(ctx, target)
-		if err != nil {
-			return &report.Diagnostic{Code: "WORKTREE_INVALID", Repo: repository.Name, Message: err.Error()}, report.ExitConflict
-		}
-		if !samePath(targetInfo.CommonDir, sourceInfo.CommonDir) || targetInfo.Branch != repository.Branch {
-			return &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("worktree %s does not match source %s and branch %s", target, sourceInfo.CommonDir, repository.Branch)}, report.ExitConflict
-		}
-	}
-	return nil, report.ExitOK
 }

@@ -13,7 +13,7 @@ const Version = 1
 
 // Manifest records worktrees that Taskflow created itself. A configured
 // worktree without an entry is intentionally not considered safe to delete:
-// it may have been created manually and merely adopted by open/create.
+// it may have been created manually and merely adopted by create.
 type Manifest struct {
 	Version   int        `json:"version"`
 	TaskID    string     `json:"taskID"`

@@ -1,17 +1,17 @@
 ---
 name: taskflow
-description: 用 Taskflow 安全创建、打开和清理多 Git 仓库 worktree 工作区。用户需要准备隔离工作区、启动 AI CLI 或清理 Taskflow 创建的任务时使用。
+description: 用 Taskflow 安全创建和清理多 Git 仓库 worktree 工作区，并为用户生成原生 AI CLI 命令。用户需要准备隔离工作区、启动 AI CLI 或清理 Taskflow 创建的任务时使用。
 ---
 
 # Taskflow 工作区向导
 
-Taskflow 负责三件事：根据声明创建或复用安全的 Git worktree，从准备好的多仓库工作区打开 Codex 或 Claude，以及清理有明确 ownership 记录的任务资源。不要用手写 Git 或文件系统命令替代这些流程。
+Taskflow 负责两件事：根据声明创建或复用安全的 Git worktree，以及清理有明确 ownership 记录的任务资源。对于 AI CLI，先检查工作区，再生成由用户执行的原生 Codex 或 Claude 命令。不要用手写 Git 或文件系统命令替代这些流程。
 
 ## 定位任务
 
 任务目录是 `<tasks-root>/<task-id>`，`--tasks-root` 默认当前目录。若用户没有提供 `task-id`，先询问任务 ID；若没有提供任务根目录，使用当前目录并告知用户。已有任务不要通过扫描目录或猜测名称来选择。
 
-`taskflow.yaml` 是唯一的持久期望配置；`.taskflow/ownership.json` 只记录由 Taskflow 实际创建的 worktree，不是任务生命周期状态。Taskflow 不创建或读取 state、inventory、validation report 或其他任务生命周期文件。第一个仓库是 open 的 cwd，后续仓库和任务根目录会作为 additional directories。
+`taskflow.yaml` 是唯一的持久期望配置；`.taskflow/ownership.json` 只记录由 Taskflow 实际创建的 worktree，不是任务生命周期状态。Taskflow 不创建或读取 state、inventory、validation report 或其他任务生命周期文件。第一个仓库是生成的 AI CLI 命令的 cwd，后续仓库和任务根目录会作为 additional directories。
 
 ## 新建工作区
 
@@ -74,17 +74,52 @@ taskflow --json --tasks-root <tasks-root> delete <task-id> --execute
 
 delete 要求 ownership manifest 与 taskflow.yaml 完全匹配，并会在任务锁、source-branch 锁和完整 preflight 后删除登记的 worktree、本地任务分支和任务目录。没有 ownership manifest、存在未登记文件、worktree dirty、target/source/branch 不匹配或目标是默认分支时，必须停止并报告，不要改用 shell 删除命令。只有用户明确允许丢弃脏文件和未合并分支时，才使用 `--force --execute`。
 
-## 打开 CLI
+## 生成 AI CLI 命令
 
-只有所有目标 worktree 的 source common directory、branch 和 path 都匹配时才打开：
+只有所有目标 worktree 的 source common directory、branch 和 path 都匹配时才生成命令。新任务要按以下顺序处理：
+
+1. 先用带 `--repo` 的 `create --dry-run` 预览，向用户说明计划并获得执行批准。
+2. 用户批准后运行带 `--repo` 的 `create --execute` 创建工作区。
+3. execute 完成后，必须再次运行不带 `--repo` 的 dry-run：
+
+   ```bash
+   taskflow --json --tasks-root <tasks-root> create <task-id> --dry-run
+   ```
+
+只有这次输出中每个 repository 的 action 都是 `reuse` 时才继续。若有 `create` 或冲突，先向用户报告问题，不生成 AI CLI 命令。已有任务也必须先运行这个不带 `--repo` 的 dry-run。匹配但 dirty 的 worktree 仍然可以复用。
+
+然后读取 `taskflow.yaml`，使用绝对路径组合命令：第一个 repository 的 worktree 是 cwd，后续 repository worktree 和任务根目录都作为 `--add-dir` 参数。先识别用户要执行命令的 shell；不能判断时先询问，不要假定所有用户都使用 Bash。每个路径都必须按目标 shell 进行引用和转义，不能把原始路径直接插入命令：
+
+- POSIX shell（sh、bash、zsh）使用单引号；路径中的单引号使用 `'\''` 形式（例如 `'/tmp/a'\''b'`）。Claude 使用 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 claude ...` 前缀。
+- PowerShell 使用单引号，路径中的单引号写成两个单引号，并使用 `Set-Location -LiteralPath`；Claude 通过 `$env:CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1'` 设置环境变量。
+- cmd.exe 使用双引号包住每个路径，使用 `cd /d "..."` 和 `set "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"`；对 cmd 元字符进行转义。路径含 `%`、`!` 或无法可靠转义时，改为生成 PowerShell 命令或先询问用户。
+
+POSIX shell 示例：
 
 ```bash
-taskflow --tasks-root <tasks-root> open <task-id>
-taskflow --tasks-root <tasks-root> open <task-id> --tool claude
-taskflow --tasks-root <tasks-root> open <task-id> --tool codex -- --model <model>
+cd '<absolute-task-root>/<first-worktree>'
+CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 claude \
+  --add-dir '<absolute-later-worktree>' \
+  --add-dir '<absolute-task-root>'
 ```
 
-`open` 默认启动 Codex；`--` 后的模型、权限和其他工具参数原样透传。不要透传 `--worktree` 或 `--worktree=...`，避免创建嵌套 worktree。匹配但 dirty 的 worktree 仍然可以打开。
+PowerShell 示例：
+
+```powershell
+Set-Location -LiteralPath '<absolute-task-root>\<first-worktree>'
+$env:CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1'
+claude --add-dir '<absolute-later-worktree>' --add-dir '<absolute-task-root>'
+```
+
+cmd.exe 示例：
+
+```bat
+cd /d "<absolute-task-root>\<first-worktree>"
+set "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"
+claude --add-dir "<absolute-later-worktree>" --add-dir "<absolute-task-root>"
+```
+
+Codex 使用相同的 cwd、路径引用和 `--add-dir` 参数，只需将工具名替换为 `codex` 并移除 Claude 环境变量。把用户请求的其他工具参数按目标 shell 正确引用后追加在这些 `--add-dir` 参数之后。把完整的、与 shell 匹配的命令展示给用户，由用户在自己的终端执行；不要由 agent shell 代为启动交互式工具。不要加入 `--worktree` 或 `--worktree=...`，避免创建嵌套 worktree；如用户请求这些参数，应省略或拒绝并说明原因。
 
 ## 失败处理
 
@@ -98,7 +133,7 @@ taskflow --tasks-root <tasks-root> open <task-id> --tool codex -- --model <model
 - `WORKTREE_DIRTY`、`PROTECTED_BRANCH`、`DEFAULT_BRANCH_UNKNOWN`、`DELETE_DIRECTORY_UNSAFE`：保留现场并修复冲突；不要直接使用 `--force`，除非用户明确授权。
 - `SOURCE_BRANCH_LOCKED`、`TASK_LOCKED`：报告锁冲突，等待占用操作完成后重试，不删除锁文件。
 - `CREATE_WORKTREE_FAILED`：保留当前 taskflow.yaml 和已创建 worktree，修复外部原因后重试 create。
-- `TOOL_NOT_FOUND`：检查 `codex` 或 `claude` 是否在 `PATH` 中。
+- 如果 `create --dry-run` 没有让每个 repository 都报告 `reuse`：先修复 source、base、branch、target 或 worktree identity 问题，再重新生成命令。
 
 每次命令结束时只需给出：结果、是否发生修改、下一条安全命令或需要用户确认的事项。
 

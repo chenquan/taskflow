@@ -1,6 +1,6 @@
 # Taskflow
 
-Taskflow 是一个面向 AI 编程的多 Git 仓库 worktree 安全协调 CLI。它负责根据声明式配置创建或复用隔离 worktree、把准备好的多仓库工作区一次性交给 Codex 或 Claude，并安全清理 Taskflow 自己创建且登记过的任务资源。
+Taskflow 是一个面向 AI 编程的多 Git 仓库 worktree 安全协调 CLI。它负责根据声明式配置创建或复用隔离 worktree、为用户生成使用准备好工作区的原生 Codex 或 Claude 命令，并安全清理 Taskflow 自己创建且登记过的任务资源。
 
 Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、合并、发布或验证脚本。这些操作继续由用户和各仓库自己的流程负责。
 
@@ -10,10 +10,10 @@ Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、�
 - 使用 Git worktree 隔离任务开发环境
 - dry-run、全量 preflight、任务锁和 source/branch 锁
 - 基于实时 Git 事实的幂等创建和中断后重试
-- 一条 `open` 命令将所有仓库关联到 Codex 或 Claude
+- bundled skill 根据 taskflow.yaml 生成原生 Codex/Claude 命令，将所有仓库关联到工作区
 - 基于 ownership manifest 的任务资源 dry-run 和安全清理
 - 将 bundled Taskflow skill 安装到 Codex 或 Claude 的全局或项目级目录
-- 文本和 JSON 输出中的 create/reuse、冲突和 CLI 启动信息
+- 文本和 JSON 输出中的 create/reuse、冲突和清理 action 信息
 
 ## 安装
 
@@ -58,7 +58,7 @@ taskflow skill install --project --tool claude
 
 ## 快速开始
 
-`--tasks-root` 默认是当前目录。仓库声明顺序必须稳定：第一个仓库是 `open` 的工作目录，后续仓库作为 additional directories。
+`--tasks-root` 默认是当前目录。仓库声明顺序必须稳定：第一个仓库是生成的 AI CLI 命令的工作目录，后续仓库作为 additional directories。
 
 先预览，确认后执行：
 
@@ -73,9 +73,13 @@ taskflow --tasks-root ~/tasks create REFUND-123 \
   --repo payment-sdk=~/projects/payment-sdk \
   --execute
 
-taskflow --tasks-root ~/tasks open REFUND-123
-taskflow --tasks-root ~/tasks open REFUND-123 --tool claude
-taskflow --tasks-root ~/tasks open REFUND-123 --tool codex -- --model gpt-5
+# execute 完成后，bundled skill 必须再次确认所有 worktree 为 reuse
+taskflow --tasks-root ~/tasks create REFUND-123 --dry-run
+
+# 确认上一步所有 action 都是 reuse 后，生成并展示原生命令
+cd '/Users/me/tasks/REFUND-123/worktrees/order-service'
+codex --add-dir '/Users/me/tasks/REFUND-123/worktrees/payment-sdk' \
+  --add-dir '/Users/me/tasks/REFUND-123' --model gpt-5
 
 taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks delete REFUND-123 --execute
@@ -83,7 +87,7 @@ taskflow --tasks-root ~/tasks delete REFUND-123 --execute
 
 `create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、worktree、分支或锁目录；新任务的 execute 会在完整 preflight 后写入初始配置并创建缺失的 worktree。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
 
-`open` 默认启动从 `PATH` 解析的 Codex。它使用第一个 worktree 作为 cwd，将后续 worktree 和任务根目录作为 additional directories。工具参数在 `--` 后原样透传，但 `--worktree` 和 `--worktree=...` 会被拒绝，以避免嵌套 worktree。匹配但 dirty 的 worktree 不会被拒绝。
+新任务先用带 `--repo` 的 dry-run 预览，用户批准后执行 create；execute 完成后，bundled skill 必须再次运行不带 `--repo` 的 `taskflow create <task-id> --dry-run`，只有所有 repository 都报告 `reuse` 时才生成命令。已有任务也从这次不带 `--repo` 的 dry-run 开始。它使用第一个 worktree 作为 cwd，将后续 worktree 和任务根目录作为绝对路径 `--add-dir` 参数，并按用户目标 shell 进行安全引用和转义：POSIX shell 使用单引号，PowerShell 使用 `Set-Location -LiteralPath` 和 `$env:...`，cmd.exe 使用 `cd /d "..."` 和 `set "...=1"`。复杂 cmd 路径无法可靠转义时改用 PowerShell。命令由用户在自己的终端执行，匹配但 dirty 的 worktree 不会阻止生成。不要加入 `--worktree` 或 `--worktree=...`，避免嵌套 worktree。
 
 ## 重试和修改配置
 
@@ -171,11 +175,11 @@ execute-mode create 会：
 4. 对新任务通过 atomic write 写入初始 taskflow.yaml；已有任务不重写用户配置；
 5. 只创建缺失的 worktree。
 
-任何 preflight 冲突都会在 Git mutation 前返回。Taskflow 的 ownership manifest 只记录由 Taskflow 实际创建的 worktree；结构匹配的手工 worktree 可以被 `open` 使用，但不会被 `delete` 清理。
+任何 preflight 冲突都会在 Git mutation 前返回。Taskflow 的 ownership manifest 只记录由 Taskflow 实际创建的 worktree；结构匹配的手工 worktree 可以被 `create` 复用，但不会被 `delete` 清理。
 
 ## 破坏性兼容边界
 
-当前版本支持 create/open/delete、`skill install` 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。已有任务的 `create --repo` 追加调用也不再支持；请直接编辑 taskflow.yaml。没有 ownership.json 的旧任务不能由 `delete` 自动清理。
+当前版本支持 create/delete、`skill install` 和当前 taskflow.yaml 配置。旧 `init/start/status/validate/repo add` 命令、旧字段、state/report/inventory 文件不在运行时兼容范围内。已有任务的 `create --repo` 追加调用也不再支持；请直接编辑 taskflow.yaml。没有 ownership.json 的旧任务不能由 `delete` 自动清理。
 
 ## 非目标
 
@@ -194,7 +198,7 @@ go test -race ./...
 go test ./cmd -run 'TestE2E' -count=1
 ```
 
-`skill install` 属于发布集成命令，不参与任务工作区的 create/open/delete 生命周期。
+`skill install` 属于发布集成命令，不参与任务工作区的 create/delete 生命周期。
 
 ## 许可证
 

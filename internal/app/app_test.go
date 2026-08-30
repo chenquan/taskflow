@@ -427,11 +427,13 @@ func TestGitErrorMessage(t *testing.T) {
 	}
 }
 
-type openRunner struct {
-	err         error
-	lookPathErr error
-	calls       int
-	spec        execx.CommandSpec
+func hasDiagnostic(diagnostics []report.Diagnostic, code string) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 type failSecondWorktreeRunner struct {
@@ -448,80 +450,9 @@ func (r *failSecondWorktreeRunner) Run(ctx context.Context, spec execx.CommandSp
 	return (execx.OSRunner{}).Run(ctx, spec)
 }
 
-func (r *failSecondWorktreeRunner) LookPath(name string) (string, error) {
-	return (execx.OSRunner{}).LookPath(name)
-}
-
 func containsArg(args []string, expected string) bool {
 	for _, arg := range args {
 		if arg == expected {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *openRunner) Run(_ context.Context, spec execx.CommandSpec) (execx.Result, error) {
-	r.calls++
-	r.spec = spec
-	if r.err != nil {
-		return execx.Result{ExitCode: 7}, r.err
-	}
-	return execx.Result{}, nil
-}
-
-func (r *openRunner) LookPath(name string) (string, error) {
-	if r.lookPathErr != nil {
-		return "", r.lookPathErr
-	}
-	return filepath.Join("/tools", name), nil
-}
-
-func TestOpenUsesLiveIdentityAndAllowsDirtyWorktree(t *testing.T) {
-	repo1, repo2 := makeGitRepo(t), makeGitRepo(t)
-	tasks := t.TempDir()
-	service := New()
-	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "OPEN", Repositories: []string{"one=" + repo1, "two=" + repo2}, Execute: true}); code != report.ExitOK {
-		t.Fatal(code)
-	}
-	task, err := service.Load(tasks, "OPEN")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(task.Task.Root, task.Repositories[0].Worktree, "dirty.txt"), []byte("dirty"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	runner := &openRunner{}
-	service.Runner = runner
-	result, code := service.Open(context.Background(), task, "", []string{"--model", "test"}, nil, nil, nil)
-	if code != report.ExitOK || !result.OK || runner.calls != 1 {
-		t.Fatalf("open: code=%d calls=%d result=%#v", code, runner.calls, result)
-	}
-	if runner.spec.Dir != filepath.Join(task.Task.Root, task.Repositories[0].Worktree) || runner.spec.Executable != filepath.Join("/tools", "codex") {
-		t.Fatalf("launch spec: %#v", runner.spec)
-	}
-	if !containsPair(runner.spec.Args, "--model", "test") {
-		t.Fatalf("extra args not forwarded: %#v", runner.spec.Args)
-	}
-	runner = &openRunner{err: errors.New("child failed")}
-	service.Runner = runner
-	if result, code := service.Open(context.Background(), task, "codex", nil, nil, nil, nil); code != report.ExitExecution || result.OK || !hasDiagnostic(result.Errors, "TOOL_EXITED") {
-		t.Fatalf("child failure: code=%d result=%#v", code, result)
-	}
-}
-
-func containsPair(values []string, first, second string) bool {
-	for i := 0; i+1 < len(values); i++ {
-		if values[i] == first && values[i+1] == second {
-			return true
-		}
-	}
-	return false
-}
-
-func hasDiagnostic(diagnostics []report.Diagnostic, code string) bool {
-	for _, diagnostic := range diagnostics {
-		if diagnostic.Code == code {
 			return true
 		}
 	}
