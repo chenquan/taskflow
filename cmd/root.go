@@ -45,19 +45,21 @@ func NewRootCommand() *cobra.Command {
 		return err
 	}})
 
-	var repositories []string
+	var repositories, localPaths []string
 	var dryRun, execute bool
 	create := &cobra.Command{Use: "create <task-id>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
 		r, code := svc.Create(context.Background(), app.CreateOptions{
 			TasksRoot:    tasksRoot,
 			TaskID:       args[0],
 			Repositories: repositories,
+			Local:        localPaths,
 			DryRun:       dryRun || !execute,
 			Execute:      execute,
 		})
 		return render(c, r, code)
 	}}
 	create.Flags().StringSliceVar(&repositories, "repo", nil, "repository name=path (repeatable for a new task only)")
+	create.Flags().StringArrayVar(&localPaths, "local", nil, "local overlay repository=source-relative-path (repeatable for a new task only)")
 	create.Flags().BoolVar(&dryRun, "dry-run", false, "show the reconciliation plan without changing files or Git state (default)")
 	create.Flags().BoolVar(&execute, "execute", false, "write initial taskflow.yaml and create missing worktrees")
 	root.AddCommand(create)

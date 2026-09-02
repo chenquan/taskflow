@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/chenquan/taskflow/internal/execx"
@@ -138,5 +139,58 @@ func TestClientAddWorktreeDefaultDoesNotTrackRemoteBase(t *testing.T) {
 	}
 	if trackedInfo.Upstream != "origin/master" {
 		t.Fatalf("explicit upstream=%q, want origin/master", trackedInfo.Upstream)
+	}
+}
+
+func TestClientLocalPathQueriesPreserveNULDelimitedNames(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if out, err := exec.Command("git", "init", "-b", "main", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	for _, args := range [][]string{{"-C", root, "config", "user.email", "test@example.com"}, {"-C", root, "config", "user.name", "Test"}, {"-C", root, "commit", "--allow-empty", "-m", "init"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "ignored"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	normalName := "normal\nname"
+	if runtime.GOOS == "windows" {
+		normalName = "normal name"
+	}
+	normal := filepath.Join(root, normalName)
+	ignored := filepath.Join(root, "ignored", "ignored name")
+	if err := os.WriteFile(normal, []byte("normal"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ignored, []byte("ignored"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", root, "add", ".gitignore").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", root, "commit", "-m", "ignore").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	client := Client{Runner: execx.OSRunner{}}
+	untracked, err := client.UntrackedPaths(context.Background(), root, []string{"."})
+	if err != nil || len(untracked) != 1 || untracked[0] != normalName {
+		t.Fatalf("untracked=%#v err=%v", untracked, err)
+	}
+	ignoredPaths, err := client.IgnoredPaths(context.Background(), root, []string{"ignored"})
+	if err != nil || len(ignoredPaths) != 1 || ignoredPaths[0] != "ignored/ignored name" {
+		t.Fatalf("ignored=%#v err=%v", ignoredPaths, err)
+	}
+	tracked, err := client.TrackedPaths(context.Background(), root, []string{".gitignore"})
+	if err != nil || len(tracked) != 1 || tracked[0] != ".gitignore" {
+		t.Fatalf("tracked=%#v err=%v", tracked, err)
+	}
+	base, err := client.BasePaths(context.Background(), root, "HEAD")
+	if err != nil || len(base) != 1 || base[0] != ".gitignore" {
+		t.Fatalf("base=%#v err=%v", base, err)
 	}
 }

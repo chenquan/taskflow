@@ -76,3 +76,44 @@ func TestValidateRejectsWorktreeEscape(t *testing.T) {
 		t.Fatalf("expected containment error, got %v", err)
 	}
 }
+
+func TestValidateNormalizesAndRejectsLocalOverlayPaths(t *testing.T) {
+	d := t.TempDir()
+	path := filepath.Join(d, "local.env")
+	if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	v := task(d)
+	v.Repositories[0].Local = &domain.LocalOverlay{Paths: []string{"dir", `config\..\local.env`}}
+	if err := Validate(&v); err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Repositories[0].Local.Paths[1]; got != "local.env" {
+		t.Fatalf("normalized local path=%q", got)
+	}
+
+	for _, paths := range [][]string{
+		{"../outside"},
+		{filepath.Join(".git", "config")},
+		{"local.env", filepath.Join("config", "..", "local.env")},
+		{""},
+	} {
+		candidate := task(d)
+		candidate.Repositories[0].Local = &domain.LocalOverlay{Paths: paths}
+		if err := Validate(&candidate); err == nil {
+			t.Fatalf("paths %#v unexpectedly passed", paths)
+		}
+	}
+}
+
+func TestLoadRejectsUnknownLocalOverlayField(t *testing.T) {
+	d := t.TempDir()
+	path := filepath.Join(d, "taskflow.yaml")
+	contents := "task:\n  id: A\nrepositories:\n  - name: one\n    source: " + d + "\n    local:\n      unexpected: true\n"
+	if err := os.WriteFile(path, []byte(contents), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unexpected") {
+		t.Fatalf("expected unknown local field rejection, got %v", err)
+	}
+}
