@@ -71,7 +71,12 @@ func TestE2EBuiltBinaryReportsSourceCopyAction(t *testing.T) {
 		t.Fatalf("source-copy action paths: %#v", data.Actions[1])
 	}
 	textPreview := run("--tasks-root", tasks, "create", "BINARY", "--repo", "app="+repo, "--dry-run")
-	if !strings.Contains(string(textPreview), "COPY source") || !strings.Contains(string(textPreview), repo) {
+	encodedRepo, err := json.Marshal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedRepoText := string(encodedRepo[1 : len(encodedRepo)-1])
+	if !strings.Contains(string(textPreview), "COPY source") || !strings.Contains(string(textPreview), encodedRepoText) {
 		t.Fatalf("binary text source-copy preview: %s", textPreview)
 	}
 	run("--tasks-root", tasks, "--json", "create", "BINARY", "--repo", "app="+repo, "--execute")
