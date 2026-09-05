@@ -76,3 +76,15 @@ func TestValidateRejectsWorktreeEscape(t *testing.T) {
 		t.Fatalf("expected containment error, got %v", err)
 	}
 }
+
+func TestLoadRejectsRetiredLocalField(t *testing.T) {
+	d := t.TempDir()
+	path := filepath.Join(d, "taskflow.yaml")
+	contents := "task:\n  id: A\nrepositories:\n  - name: one\n    source: " + d + "\n    local:\n      unexpected: true\n"
+	if err := os.WriteFile(path, []byte(contents), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "field local not found") {
+		t.Fatalf("expected retired local field rejection, got %v", err)
+	}
+}

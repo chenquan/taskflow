@@ -14,9 +14,9 @@ type TaskInfo struct {
 }
 
 type Repository struct {
-	Name     string `yaml:"name" json:"name"`
-	Source   string `yaml:"source" json:"source"`
-	Base     string `yaml:"base" json:"base"`
-	Branch   string `yaml:"branch" json:"branch"`
-	Worktree string `yaml:"worktree" json:"worktree"`
+	Name     string        `yaml:"name" json:"name"`
+	Source   string        `yaml:"source" json:"source"`
+	Base     string        `yaml:"base" json:"base"`
+	Branch   string        `yaml:"branch" json:"branch"`
+	Worktree string        `yaml:"worktree" json:"worktree"`
 }

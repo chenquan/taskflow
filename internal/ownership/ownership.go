@@ -21,11 +21,21 @@ type Manifest struct {
 }
 
 type Worktree struct {
-	Repository string `json:"repository"`
-	Source     string `json:"source"`
-	CommonDir  string `json:"commonDir"`
-	Branch     string `json:"branch"`
-	Target     string `json:"target"`
+	Repository string   `json:"repository"`
+	Source     string   `json:"source"`
+	CommonDir  string   `json:"commonDir"`
+	Branch     string   `json:"branch"`
+	Target     string   `json:"target"`
+	SourceCopy *SourceCopy `json:"sourceCopy,omitempty"`
+}
+
+// SourceCopy records whether Taskflow finished copying the source working
+// tree into this managed worktree. It is intentionally repository-level: the
+// source tree is a creation-time snapshot, not a per-file synchronization log.
+type SourceCopy struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Status string `json:"status"` // pending or complete
 }
 
 func Path(taskRoot string) string {
@@ -71,6 +81,9 @@ func Validate(manifest Manifest) error {
 			return fmt.Errorf("duplicate ownership entry for %q", worktree.Repository)
 		}
 		seen[key] = true
+		if err := validateSourceCopy(worktree); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -81,6 +94,7 @@ func (m *Manifest) Add(worktree Worktree) {
 		if current.Source == worktree.Source && current.Branch == worktree.Branch && current.Target == worktree.Target {
 			current.Repository = worktree.Repository
 			current.CommonDir = worktree.CommonDir
+			current.SourceCopy = worktree.SourceCopy
 			return
 		}
 	}
@@ -97,4 +111,21 @@ func Save(taskRoot string, manifest Manifest) error {
 	}
 	raw = append(raw, '\n')
 	return fsx.AtomicWrite(Path(taskRoot), raw, 0644)
+}
+
+func validateSourceCopy(worktree Worktree) error {
+	sourceCopy := worktree.SourceCopy
+	if sourceCopy == nil {
+		return nil
+	}
+	if sourceCopy.Source == "" || sourceCopy.Target == "" {
+		return fmt.Errorf("source-copy ownership entry for %q is incomplete", worktree.Repository)
+	}
+	if sourceCopy.Status != "pending" && sourceCopy.Status != "complete" {
+		return fmt.Errorf("source-copy ownership entry for %q has unsupported status %q", worktree.Repository, sourceCopy.Status)
+	}
+	if sourceCopy.Source != worktree.Source || sourceCopy.Target != worktree.Target {
+		return fmt.Errorf("source-copy ownership entry for %q has stale source or target identity", worktree.Repository)
+	}
+	return nil
 }

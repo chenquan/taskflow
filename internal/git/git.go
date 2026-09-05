@@ -99,6 +99,23 @@ func (c Client) HasRef(ctx context.Context, path, ref string) bool {
 	return err == nil
 }
 
+// ResetIndex populates a worktree index from HEAD without touching working
+// tree files. `git worktree add --no-checkout` leaves the index empty, so a
+// mixed reset is required before copied files can be compared against the
+// configured base.
+func (c Client) ResetIndex(ctx context.Context, path string) error {
+	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "reset", "--quiet"}})
+	return err
+}
+
+func gitCommandError(prefix string, result execx.Result) error {
+	message := strings.TrimSpace(result.Stderr)
+	if message == "" {
+		return fmt.Errorf("%s", prefix)
+	}
+	return fmt.Errorf("%s: %s", prefix, message)
+}
+
 // DefaultBase resolves the source repository's remote default branch without
 // fetching or changing Git state.
 func (c Client) DefaultBase(ctx context.Context, path string) (string, error) {
@@ -153,8 +170,14 @@ func (c Client) Worktrees(ctx context.Context, path string) ([]Worktree, error) 
 	flush()
 	return result, nil
 }
-func (c Client) AddWorktree(ctx context.Context, source, branch, target, base string, trackBase bool) error {
+// AddWorktree registers a worktree from the configured base. With noCheckout
+// the working tree and index stay empty so the caller can populate the index
+// and copy a source snapshot without overwriting base files.
+func (c Client) AddWorktree(ctx context.Context, source, branch, target, base string, trackBase, noCheckout bool) error {
 	args := []string{"-C", source, "worktree", "add"}
+	if noCheckout {
+		args = append(args, "--no-checkout")
+	}
 	if c.HasRef(ctx, source, "refs/heads/"+branch) {
 		args = append(args, target, branch)
 	} else {

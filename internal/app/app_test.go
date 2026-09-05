@@ -117,7 +117,7 @@ func TestCreateIsIdempotentAndDoesNotPersistState(t *testing.T) {
 		t.Fatalf("repeat create: code=%d result=%#v", code, second)
 	}
 	items := second.Data.(map[string]any)["actions"].([]plan.Item)
-	if len(items) != 1 || items[0].Status != "reuse" {
+	if len(items) != 2 || items[0].Kind != "worktree" || items[0].Status != "reuse" || items[1].Kind != "source-copy" || items[1].Status != "reuse" {
 		t.Fatalf("repeat actions: %#v", items)
 	}
 }
@@ -274,6 +274,317 @@ func TestCreateRejectsMismatchedTargetBeforeMutation(t *testing.T) {
 	after, _ := os.ReadFile(filepath.Join(taskRoot, "worktrees", "repo", "keep.txt"))
 	if string(before) != string(after) {
 		t.Fatal("mismatched target changed")
+	}
+}
+
+func TestCreateCopiesCompleteSourceWorkingTree(t *testing.T) {
+	repo := makeGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.log\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"-C", repo, "add", ".gitignore"}, {"-C", repo, "commit", "-m", "ignore"}} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"-C", repo, "add", "tracked.txt"}, {"-C", repo, "commit", "-m", "tracked"}, {"-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"}} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed\nmodified\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("untracked"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "ignored.log"), []byte("ignored"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "config", "dev"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "config", "dev", "settings local.env"), []byte("debug=true"), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks := t.TempDir()
+	service := New()
+	preview, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Repositories: []string{"app=" + repo}, DryRun: true})
+	if code != report.ExitOK || !preview.OK {
+		t.Fatalf("preview: code=%d result=%#v", code, preview)
+	}
+	previewItems := preview.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(previewItems) != 2 || previewItems[0].Status != "create" || previewItems[1].Kind != "source-copy" || previewItems[1].Status != "copy" {
+		t.Fatalf("preview actions: %#v", previewItems)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "SNAPSHOT")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run changed task root: %v", err)
+	}
+
+	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Repositories: []string{"app=" + repo}, Execute: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("execute: code=%d result=%#v", code, result)
+	}
+	executeItems := result.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(executeItems) != 2 || executeItems[0].Status != "created" || executeItems[1].Status != "copied" {
+		t.Fatalf("execute actions: %#v", executeItems)
+	}
+	task, err := service.Load(tasks, "SNAPSHOT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(task.Task.Root, task.Repositories[0].Worktree)
+	for _, file := range []string{"tracked.txt", "untracked.txt", "ignored.log", filepath.Join("config", "dev", "settings local.env")} {
+		if _, err := os.Stat(filepath.Join(target, file)); err != nil {
+			t.Fatalf("copied file %s missing: %v", file, err)
+		}
+	}
+	if contents, err := os.ReadFile(filepath.Join(target, "tracked.txt")); err != nil || string(contents) != "committed\nmodified\n" {
+		t.Fatalf("tracked modification not copied: %q err=%v", contents, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, ".git")); err != nil {
+		t.Fatalf("target lost its own git metadata: %v", err)
+	}
+	manifest, exists, err := ownership.Load(task.Task.Root)
+	if err != nil || !exists || len(manifest.Worktrees) != 1 || manifest.Worktrees[0].SourceCopy == nil || manifest.Worktrees[0].SourceCopy.Status != "complete" {
+		t.Fatalf("source-copy ownership: manifest=%#v exists=%v err=%v", manifest, exists, err)
+	}
+
+	status, err := exec.Command("git", "-C", target, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("target status: %v: %s", err, status)
+	}
+	statusText := string(status)
+	if !strings.Contains(statusText, " M tracked.txt") || !strings.Contains(statusText, "?? untracked.txt") {
+		t.Fatalf("copied changes are not normal working-tree changes: %q", statusText)
+	}
+	if strings.Contains(statusText, "D ") || strings.Contains(statusText, "D\t") {
+		t.Fatalf("empty index leaked staged deletions: %q", statusText)
+	}
+
+	// A completed source copy is a creation-time snapshot: later source
+	// changes must not be refreshed into a reused worktree.
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed later\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	second, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Execute: true})
+	if code != report.ExitOK || !second.OK {
+		t.Fatalf("repeat create: code=%d result=%#v", code, second)
+	}
+	secondItems := second.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(secondItems) != 2 || secondItems[0].Status != "reuse" || secondItems[1].Status != "reuse" {
+		t.Fatalf("repeat actions: %#v", secondItems)
+	}
+	if contents, err := os.ReadFile(filepath.Join(target, "tracked.txt")); err != nil || string(contents) != "committed\nmodified\n" {
+		t.Fatalf("completed copy was refreshed: %q err=%v", contents, err)
+	}
+}
+
+func TestCreateKeepsCleanStatusWhenSourceMatchesBase(t *testing.T) {
+	repo := makeGitRepo(t)
+	tasks := t.TempDir()
+	if result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "CLEAN", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("create: code=%d result=%#v", code, result)
+	}
+	target := filepath.Join(tasks, "CLEAN", "worktrees", "app")
+	status, err := exec.Command("git", "-C", target, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("target status: %v: %s", err, status)
+	}
+	if len(strings.TrimSpace(string(status))) != 0 {
+		t.Fatalf("target of a clean source is dirty: %q", status)
+	}
+}
+
+func TestCreateExcludesNestedGitMetadata(t *testing.T) {
+	repo := makeGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"-C", repo, "add", "tracked.txt"}, {"-C", repo, "commit", "-m", "tracked"}} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if output, err := exec.Command("git", "-C", repo, "worktree", "add", "./wt-nested", "-b", "nested").CombinedOutput(); err != nil {
+		t.Fatalf("nested worktree: %v: %s", err, output)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "sub", ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "sub", ".git", "HEAD"), []byte("embedded"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tasks := t.TempDir()
+	if result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "NESTED", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("create: code=%d result=%#v", code, result)
+	}
+	target := filepath.Join(tasks, "NESTED", "worktrees", "app")
+	if _, err := os.Stat(filepath.Join(target, "wt-nested", "tracked.txt")); err != nil {
+		t.Fatalf("nested working files were not copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "wt-nested", ".git")); !os.IsNotExist(err) {
+		t.Fatalf("nested worktree registration was copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "sub", ".git")); !os.IsNotExist(err) {
+		t.Fatalf("embedded repository metadata was copied: %v", err)
+	}
+}
+
+func TestCreateDoesNotCopyIntoMatchingManualWorktree(t *testing.T) {
+	repo := makeGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "local.env"), []byte("local"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tasks := t.TempDir()
+	taskRoot := filepath.Join(tasks, "MANUAL")
+	target := filepath.Join(taskRoot, "worktrees", "app")
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		t.Fatal(err)
+	}
+	client := git.Client{Runner: execx.OSRunner{}}
+	if err := client.AddWorktree(context.Background(), repo, "feature/manual", target, "HEAD", false, false); err != nil {
+		t.Fatal(err)
+	}
+	task := domain.Task{
+		Version: domain.ConfigVersion,
+		Task:    domain.TaskInfo{ID: "MANUAL", Root: taskRoot},
+		Repositories: []domain.Repository{{
+			Name:     "app",
+			Source:   repo,
+			Base:     "HEAD",
+			Branch:   "feature/manual",
+			Worktree: filepath.Join("worktrees", "app"),
+		}},
+	}
+	raw, err := config.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "taskflow.yaml"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "MANUAL", Execute: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("manual reuse: code=%d result=%#v", code, result)
+	}
+	items := result.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(items) != 2 || items[0].Status != "reuse" || items[1].Status != "reuse" || items[1].Reason == "" {
+		t.Fatalf("manual reuse actions: %#v", items)
+	}
+	if _, err := os.Stat(filepath.Join(target, "local.env")); !os.IsNotExist(err) {
+		t.Fatalf("manual worktree received a source copy: %v", err)
+	}
+}
+
+func TestCreateRepairsPendingSourceCopyWithoutRecreatingWorktree(t *testing.T) {
+	repo := makeGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "one.env"), []byte("one"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "two.env"), []byte("two"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tasks := t.TempDir()
+	service := New()
+	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "PENDING", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("initial create: code=%d result=%#v", code, result)
+	}
+	task, err := service.Load(tasks, "PENDING")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(task.Task.Root, task.Repositories[0].Worktree)
+	manifest, exists, err := ownership.Load(task.Task.Root)
+	if err != nil || !exists {
+		t.Fatalf("load manifest: exists=%v err=%v", exists, err)
+	}
+	manifest.Worktrees[0].SourceCopy.Status = "pending"
+	if err := ownership.Save(task.Task.Root, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(target, "two.env")); err != nil {
+		t.Fatal(err)
+	}
+	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "PENDING", Execute: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("pending retry: code=%d result=%#v", code, result)
+	}
+	items := result.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(items) != 2 || items[0].Status != "reuse" || items[1].Status != "repaired" {
+		t.Fatalf("pending retry actions: %#v", items)
+	}
+	if _, err := os.Stat(filepath.Join(target, "two.env")); err != nil {
+		t.Fatalf("pending source copy was not repaired: %v", err)
+	}
+	manifest, _, err = ownership.Load(task.Task.Root)
+	if err != nil || manifest.Worktrees[0].SourceCopy.Status != "complete" {
+		t.Fatalf("pending source-copy status: %#v err=%v", manifest, err)
+	}
+}
+
+func TestCreateRegistersMissingPendingTargetBeforeCopying(t *testing.T) {
+	repo := makeGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("notes"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tasks := t.TempDir()
+	service := New()
+	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "MISSING", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("initial create: code=%d result=%#v", code, result)
+	}
+	task, err := service.Load(tasks, "MISSING")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(task.Task.Root, task.Repositories[0].Worktree)
+	manifest, exists, err := ownership.Load(task.Task.Root)
+	if err != nil || !exists {
+		t.Fatalf("load manifest: exists=%v err=%v", exists, err)
+	}
+	manifest.Worktrees[0].SourceCopy.Status = "pending"
+	if err := ownership.Save(task.Task.Root, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "-C", repo, "worktree", "remove", "--force", target).CombinedOutput(); err != nil {
+		t.Fatalf("remove worktree: %v: %s", err, output)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target still present: %v", err)
+	}
+	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "MISSING", Execute: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("missing pending retry: code=%d result=%#v", code, result)
+	}
+	items := result.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(items) != 2 || items[0].Status != "created" || items[1].Status != "copied" {
+		t.Fatalf("missing pending actions: %#v", items)
+	}
+	if _, err := os.Stat(filepath.Join(target, "notes.txt")); err != nil {
+		t.Fatalf("re-registered target was not copied: %v", err)
+	}
+	manifest, _, err = ownership.Load(task.Task.Root)
+	if err != nil || manifest.Worktrees[0].SourceCopy.Status != "complete" {
+		t.Fatalf("source-copy status after re-registration: %#v err=%v", manifest, err)
+	}
+}
+
+func TestCreateRejectsSourceTargetOverlapBeforeMutation(t *testing.T) {
+	repo := makeGitRepo(t)
+	tasks := filepath.Join(repo, ".tasks")
+	if err := os.MkdirAll(tasks, 0755); err != nil {
+		t.Fatal(err)
+	}
+	result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "OVERLAP", Repositories: []string{"app=" + repo}, DryRun: true})
+	if code != report.ExitConflict || result.OK || !hasDiagnostic(result.Errors, "SOURCE_COPY_BOUNDARY") {
+		t.Fatalf("expected source/target boundary conflict: code=%d result=%#v", code, result)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "OVERLAP")); !os.IsNotExist(err) {
+		t.Fatalf("boundary conflict changed task root: %v", err)
 	}
 }
 

@@ -82,13 +82,14 @@ func TestE2ECreateJSONAndReuseDirtyWorktree(t *testing.T) {
 	var reuseData struct {
 		Actions []struct {
 			Repo   string `json:"repo"`
+			Kind   string `json:"kind"`
 			Status string `json:"status"`
 		} `json:"actions"`
 	}
 	if err := json.Unmarshal(reuse.Data, &reuseData); err != nil {
 		t.Fatalf("reuse data: %v", err)
 	}
-	if len(reuseData.Actions) != 2 || reuseData.Actions[0].Repo != "one" || reuseData.Actions[0].Status != "reuse" || reuseData.Actions[1].Repo != "two" || reuseData.Actions[1].Status != "reuse" {
+	if len(reuseData.Actions) != 4 || reuseData.Actions[0].Repo != "one" || reuseData.Actions[0].Kind != "worktree" || reuseData.Actions[0].Status != "reuse" || reuseData.Actions[1].Kind != "source-copy" || reuseData.Actions[1].Status != "reuse" || reuseData.Actions[2].Repo != "two" || reuseData.Actions[2].Kind != "worktree" || reuseData.Actions[2].Status != "reuse" || reuseData.Actions[3].Kind != "source-copy" || reuseData.Actions[3].Status != "reuse" {
 		t.Fatalf("reuse actions: %#v", reuseData.Actions)
 	}
 	if _, err := runE2E(t, tasks, "--json", "create", "FLOW", "--execute"); err != nil {
@@ -264,6 +265,30 @@ func TestE2EDeleteRefusesUnownedAndDirtyWorktrees(t *testing.T) {
 		t.Fatalf("dirty file was removed: %v", err)
 	}
 	if output, err := runE2E(t, tasks, "--json", "delete", "DIRTY", "--execute", "--force"); err != nil {
+		t.Fatalf("forced delete: %v: %s", err, output)
+	}
+}
+
+func TestE2EDeleteTreatsCopiedSnapshotAsDirty(t *testing.T) {
+	repo := e2eGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "local.env"), []byte("local"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tasks := t.TempDir()
+	if output, err := runE2E(t, tasks, "create", "SNAPSHOT-DELETE", "--repo", "repo="+repo, "--execute"); err != nil {
+		t.Fatalf("snapshot create: %v: %s", err, output)
+	}
+	target := filepath.Join(tasks, "SNAPSHOT-DELETE", "worktrees", "repo")
+	if _, err := os.Stat(filepath.Join(target, "local.env")); err != nil {
+		t.Fatalf("copied snapshot is incomplete: %v", err)
+	}
+	if output, err := runE2E(t, tasks, "--json", "delete", "SNAPSHOT-DELETE", "--execute"); err == nil || !strings.Contains(output, "WORKTREE_DIRTY") {
+		t.Fatalf("expected copied-snapshot dirty refusal: %v: %s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(target, "local.env")); err != nil {
+		t.Fatalf("snapshot file was removed by refused delete: %v", err)
+	}
+	if output, err := runE2E(t, tasks, "delete", "SNAPSHOT-DELETE", "--execute", "--force"); err != nil {
 		t.Fatalf("forced delete: %v: %s", err, output)
 	}
 }

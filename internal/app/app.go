@@ -51,6 +51,24 @@ type createResolution struct {
 	trackBase            bool
 }
 
+type repositoryCreatePlan struct {
+	repository     domain.Repository
+	sourceInfo     git.Info
+	target         string
+	worktreeAction int
+	copyAction     int
+	worktreeStatus string // "create" or "reuse"
+	copyStatus     string // "copy", "repair", or "reuse"
+	owned          *ownership.Worktree
+}
+
+type createPlan struct {
+	task         domain.Task
+	actions      []plan.Item
+	repositories []repositoryCreatePlan
+	manifest     ownership.Manifest
+}
+
 type deleteAction struct {
 	ID          string `json:"id"`
 	Repo        string `json:"repo,omitempty"`
@@ -102,12 +120,12 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 		res.Fail(*diagnostic)
 		return res, code
 	}
-	items, diagnostic, code := s.preflightCreate(ctx, resolved.task)
+	prepared, diagnostic, code := s.preflightCreate(ctx, resolved.task)
 	if diagnostic != nil {
 		res.Fail(*diagnostic)
 		return res, code
 	}
-	res.Data = createData(resolved.task, items, !o.Execute)
+	res.Data = createData(resolved.task, prepared.actions, !o.Execute)
 	if !o.Execute {
 		return res, report.ExitOK
 	}
@@ -136,39 +154,35 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 		return res, code
 	}
 	defer releaseSourceLocks(sourceLocks)
-	items, diagnostic, code = s.preflightCreate(ctx, resolved.task)
+	prepared, diagnostic, code = s.preflightCreate(ctx, resolved.task)
 	if diagnostic != nil {
 		res.Fail(*diagnostic)
 		return res, code
 	}
-	manifest, manifestExists, err := ownership.Load(resolved.task.Task.Root)
-	if err != nil {
-		res.Fail(report.Diagnostic{Code: "INVALID_OWNERSHIP", Message: err.Error(), Hint: ownership.Path(resolved.task.Task.Root)})
-		return res, report.ExitConfig
-	}
-	if !manifestExists {
-		manifest = ownership.New(resolved.task.Task.ID)
-	} else if manifest.TaskID != resolved.task.Task.ID {
-		res.Fail(report.Diagnostic{Code: "INVALID_OWNERSHIP", Message: fmt.Sprintf("ownership taskID %q does not match %q", manifest.TaskID, resolved.task.Task.ID), Hint: ownership.Path(resolved.task.Task.Root)})
-		return res, report.ExitConfig
-	}
+	items := prepared.actions
+	manifest := prepared.manifest
 	ownershipChanged := false
 	for index, repository := range resolved.task.Repositories {
-		if items[index].Status != "create" {
+		repositoryPlan := &prepared.repositories[index]
+		if repositoryPlan.worktreeStatus != "create" {
 			continue
 		}
-		sourceInfo, inspectErr := s.Git.Inspect(ctx, repository.Source)
-		if inspectErr != nil || sourceInfo.CommonDir == "" {
-			res.Fail(report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: gitErrorMessage("inspect configured source", inspectErr)})
-			return res, report.ExitEnvironment
-		}
-		manifest.Add(ownership.Worktree{
+		entry := ownership.Worktree{
 			Repository: repository.Name,
 			Source:     repository.Source,
-			CommonDir:  sourceInfo.CommonDir,
+			CommonDir:  repositoryPlan.sourceInfo.CommonDir,
 			Branch:     repository.Branch,
-			Target:     filepath.Join(resolved.task.Task.Root, repository.Worktree),
-		})
+			Target:     repositoryPlan.target,
+		}
+		// A missing target must receive a fresh snapshot even when an older
+		// attempt recorded a complete copy: the copied workspace is gone.
+		sourceCopy := ownership.SourceCopy{Source: repository.Source, Target: repositoryPlan.target, Status: "pending"}
+		if repositoryPlan.owned != nil && repositoryPlan.owned.SourceCopy != nil {
+			sourceCopy = *repositoryPlan.owned.SourceCopy
+		}
+		sourceCopy.Status = "pending"
+		entry.SourceCopy = &sourceCopy
+		manifest.Add(entry)
 		ownershipChanged = true
 	}
 	if resolved.configurationChanged {
@@ -188,23 +202,63 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 		return res, report.ExitExecution
 	}
 	for index, repository := range resolved.task.Repositories {
-		if items[index].Status == "reuse" {
+		repositoryPlan := &prepared.repositories[index]
+		if repositoryPlan.worktreeStatus == "create" {
+			if err = os.MkdirAll(filepath.Dir(repositoryPlan.target), 0755); err != nil {
+				items[repositoryPlan.worktreeAction].Status = "failed"
+				items[repositoryPlan.copyAction].Status = "blocked"
+				res.Data = createData(resolved.task, items, false)
+				res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
+				return res, report.ExitPartial
+			}
+			if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, repositoryPlan.target, repository.Base, resolved.trackBase, true); err != nil {
+				items[repositoryPlan.worktreeAction].Status = "failed"
+				items[repositoryPlan.copyAction].Status = "blocked"
+				res.Data = createData(resolved.task, items, false)
+				res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
+				return res, report.ExitPartial
+			}
+			items[repositoryPlan.worktreeAction].Status = "created"
+		}
+		if repositoryPlan.copyStatus == "reuse" {
 			continue
 		}
-		target := filepath.Join(resolved.task.Task.Root, repository.Worktree)
-		if err = os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			items[index].Status = "failed"
+		// `--no-checkout` registration leaves the index empty; populate it
+		// from HEAD before copying so tracked source modifications surface as
+		// normal unstaged changes. The mixed reset is idempotent, so repairs
+		// of interrupted registrations stay correct.
+		if err = s.Git.ResetIndex(ctx, repositoryPlan.target); err != nil {
+			items[repositoryPlan.copyAction].Status = "failed"
 			res.Data = createData(resolved.task, items, false)
-			res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
+			res.Fail(report.Diagnostic{Code: "SOURCE_INDEX_RESET_FAILED", Repo: repository.Name, Message: err.Error()})
 			return res, report.ExitPartial
 		}
-		if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, target, repository.Base, resolved.trackBase); err != nil {
-			items[index].Status = "failed"
+		stats, err := fsx.CopyTree(repository.Source, repositoryPlan.target)
+		if err != nil {
+			items[repositoryPlan.copyAction].Status = "failed"
 			res.Data = createData(resolved.task, items, false)
-			res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
+			res.Fail(copyDiagnostic(repository.Name, err))
 			return res, report.ExitPartial
 		}
-		items[index].Status = "created"
+		if repositoryPlan.worktreeStatus == "create" {
+			items[repositoryPlan.copyAction].Status = "copied"
+		} else {
+			items[repositoryPlan.copyAction].Status = "repaired"
+		}
+		items[repositoryPlan.copyAction].FileCount = int(stats.Entries)
+		items[repositoryPlan.copyAction].TotalBytes = stats.Bytes
+		owned := manifestEntry(&manifest, repository.Name, repositoryPlan.target)
+		if owned == nil || owned.SourceCopy == nil {
+			res.Data = createData(resolved.task, items, false)
+			res.Fail(report.Diagnostic{Code: "WRITE_OWNERSHIP_FAILED", Repo: repository.Name, Message: "source-copy ownership entry is missing", Hint: ownership.Path(resolved.task.Task.Root)})
+			return res, report.ExitPartial
+		}
+		owned.SourceCopy.Status = "complete"
+		if err = ownership.Save(resolved.task.Task.Root, manifest); err != nil {
+			res.Data = createData(resolved.task, items, false)
+			res.Fail(report.Diagnostic{Code: "WRITE_OWNERSHIP_FAILED", Repo: repository.Name, Message: err.Error(), Hint: ownership.Path(resolved.task.Task.Root)})
+			return res, report.ExitPartial
+		}
 	}
 	res.Data = createData(resolved.task, items, false)
 	return res, report.ExitOK
@@ -618,18 +672,18 @@ func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOp
 		}
 		task = domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: taskRoot}}
 	}
-	if len(o.Repositories) == 0 {
-		if !configurationExists {
-			return createResolution{}, &report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "at least one --repo is required for a new task"}, report.ExitConfig
-		}
-		return createResolution{task: task, trackBase: true}, nil, report.ExitOK
-	}
-	if configurationExists {
+	if configurationExists && len(o.Repositories) > 0 {
 		return createResolution{}, &report.Diagnostic{
 			Code:    "CONFIG_EDIT_REQUIRED",
 			Message: "taskflow.yaml already exists; edit it directly and rerun create without --repo",
 			Hint:    configPath,
 		}, report.ExitConfig
+	}
+	if len(o.Repositories) == 0 {
+		if !configurationExists {
+			return createResolution{}, &report.Diagnostic{Code: "INVALID_ARGUMENT", Message: "at least one --repo is required for a new task"}, report.ExitConfig
+		}
+		return createResolution{task: task, trackBase: true}, nil, report.ExitOK
 	}
 
 	for _, raw := range o.Repositories {
@@ -725,12 +779,35 @@ func rejectLegacyRuntime(taskRoot string) error {
 	return nil
 }
 
-func (s Service) preflightCreate(ctx context.Context, task domain.Task) ([]plan.Item, *report.Diagnostic, report.ExitCode) {
+func (s Service) preflightCreate(ctx context.Context, task domain.Task) (*createPlan, *report.Diagnostic, report.ExitCode) {
 	items, err := plan.Build(task)
 	if err != nil {
 		return nil, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
 	}
+	manifest, exists, err := ownership.Load(task.Task.Root)
+	if err != nil {
+		return nil, &report.Diagnostic{Code: "INVALID_OWNERSHIP", Message: err.Error(), Hint: ownership.Path(task.Task.Root)}, report.ExitConfig
+	}
+	if !exists {
+		manifest = ownership.New(task.Task.ID)
+	} else if manifest.TaskID != task.Task.ID {
+		return nil, &report.Diagnostic{Code: "INVALID_OWNERSHIP", Message: fmt.Sprintf("ownership taskID %q does not match %q", manifest.TaskID, task.Task.ID), Hint: ownership.Path(task.Task.Root)}, report.ExitConfig
+	}
+	ownedByRepo := make(map[string]ownership.Worktree, len(manifest.Worktrees))
+	for _, owned := range manifest.Worktrees {
+		if _, duplicate := ownedByRepo[owned.Repository]; duplicate {
+			return nil, &report.Diagnostic{Code: "OWNERSHIP_MISMATCH", Repo: owned.Repository, Message: "ownership manifest contains duplicate repository entries"}, report.ExitConflict
+		}
+		ownedByRepo[owned.Repository] = owned
+	}
+	prepared := &createPlan{task: task, actions: items, manifest: manifest, repositories: make([]repositoryCreatePlan, 0, len(task.Repositories))}
 	for index, repository := range task.Repositories {
+		worktreeAction := index * 2
+		copyAction := worktreeAction + 1
+		target := filepath.Join(task.Task.Root, repository.Worktree)
+		items[worktreeAction].Target = target
+		items[copyAction].Target = target
+		items[copyAction].Source = repository.Source
 		sourceInfo, err := s.Git.Inspect(ctx, repository.Source)
 		if err != nil || sourceInfo.CommonDir == "" {
 			return nil, &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: gitErrorMessage("inspect configured source", err)}, report.ExitEnvironment
@@ -738,11 +815,13 @@ func (s Service) preflightCreate(ctx context.Context, task domain.Task) ([]plan.
 		if !s.Git.HasRef(ctx, repository.Source, repository.Base) {
 			return nil, &report.Diagnostic{Code: "BASE_REF_NOT_FOUND", Repo: repository.Name, Message: "base ref " + repository.Base + " does not exist locally"}, report.ExitEnvironment
 		}
+		if fsx.Within(repository.Source, target) || fsx.Within(target, repository.Source) {
+			return nil, &report.Diagnostic{Code: "SOURCE_COPY_BOUNDARY", Repo: repository.Name, Message: fmt.Sprintf("source %s and target %s must not contain one another", repository.Source, target)}, report.ExitConflict
+		}
 		worktrees, err := s.Git.Worktrees(ctx, repository.Source)
 		if err != nil {
 			return nil, &report.Diagnostic{Code: "WORKTREE_INSPECTION_FAILED", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
 		}
-		target := filepath.Join(task.Task.Root, repository.Worktree)
 		matched := false
 		for _, worktree := range worktrees {
 			if worktree.Branch == repository.Branch && !samePath(worktree.Path, target) {
@@ -761,19 +840,95 @@ func (s Service) preflightCreate(ctx context.Context, task domain.Task) ([]plan.
 			matched = true
 		}
 		if !matched {
-			if _, err = os.Stat(target); err == nil {
+			if _, err = os.Lstat(target); err == nil {
 				return nil, &report.Diagnostic{Code: "WORKTREE_MISMATCH", Repo: repository.Name, Message: fmt.Sprintf("target %s exists but is not the configured worktree", target)}, report.ExitConflict
 			} else if !os.IsNotExist(err) {
 				return nil, &report.Diagnostic{Code: "WORKTREE_INSPECTION_FAILED", Repo: repository.Name, Message: err.Error()}, report.ExitEnvironment
 			}
-			items[index].Status = "create"
-			items[index].Description = fmt.Sprintf("CREATE %s -> %s", repository.Name, repository.Worktree)
+			items[worktreeAction].Status = "create"
+			items[worktreeAction].Description = fmt.Sprintf("CREATE %s -> %s", repository.Name, target)
 		} else {
-			items[index].Status = "reuse"
-			items[index].Description = fmt.Sprintf("REUSE %s -> %s", repository.Name, repository.Worktree)
+			items[worktreeAction].Status = "reuse"
+			items[worktreeAction].Description = fmt.Sprintf("REUSE %s -> %s", repository.Name, target)
+		}
+
+		repositoryPlan := repositoryCreatePlan{
+			repository:     repository,
+			sourceInfo:     sourceInfo,
+			target:         target,
+			worktreeAction: worktreeAction,
+			copyAction:     copyAction,
+			worktreeStatus: items[worktreeAction].Status,
+		}
+		owned, hasOwned := ownedByRepo[repository.Name]
+		if hasOwned {
+			if !samePath(owned.Source, repository.Source) || owned.Branch != repository.Branch || !samePath(owned.Target, target) || !samePath(owned.CommonDir, sourceInfo.CommonDir) {
+				return nil, &report.Diagnostic{Code: "OWNERSHIP_MISMATCH", Repo: repository.Name, Message: "ownership entry does not match the live source, branch, common directory, or target"}, report.ExitConflict
+			}
+			copied := owned
+			repositoryPlan.owned = &copied
+		}
+		switch {
+		case !matched:
+			repositoryPlan.copyStatus = "copy"
+		case !hasOwned || owned.SourceCopy == nil:
+			// A matching worktree without a pending Taskflow copy record is
+			// never populated implicitly.
+			repositoryPlan.copyStatus = "reuse"
+			if hasOwned {
+				items[copyAction].Reason = "matching worktree has no source-copy record"
+			} else {
+				items[copyAction].Reason = "matching worktree is not Taskflow-owned"
+			}
+		case owned.SourceCopy.Status == "pending":
+			repositoryPlan.copyStatus = "repair"
+		default:
+			repositoryPlan.copyStatus = "reuse"
+		}
+		setCopyItem(&items[copyAction], repositoryPlan.copyStatus)
+		prepared.repositories = append(prepared.repositories, repositoryPlan)
+	}
+	return prepared, nil, report.ExitOK
+}
+
+func setCopyItem(item *plan.Item, status string) {
+	item.Status = status
+	switch status {
+	case "copy":
+		item.Description = fmt.Sprintf("COPY source %s -> %s", item.Source, item.Target)
+	case "repair":
+		item.Description = fmt.Sprintf("REPAIR source copy %s -> %s", item.Source, item.Target)
+	case "reuse":
+		item.Description = fmt.Sprintf("REUSE source copy %s -> %s", item.Source, item.Target)
+	default:
+		item.Description = fmt.Sprintf("SKIP source copy %s", item.Target)
+	}
+}
+
+func manifestEntry(manifest *ownership.Manifest, repository, target string) *ownership.Worktree {
+	for index := range manifest.Worktrees {
+		entry := &manifest.Worktrees[index]
+		if entry.Repository == repository && samePath(entry.Target, target) {
+			return entry
 		}
 	}
-	return items, nil, report.ExitOK
+	return nil
+}
+
+func copyDiagnostic(repo string, err error) report.Diagnostic {
+	code := "SOURCE_COPY_FAILED"
+	var copyErr *fsx.CopyError
+	if errors.As(err, &copyErr) {
+		switch copyErr.Op {
+		case "unsupported-entry":
+			code = "SOURCE_COPY_UNSUPPORTED_ENTRY"
+		case "symlink", "readlink":
+			code = "SOURCE_COPY_SYMLINK_FAILED"
+		case "boundary":
+			code = "SOURCE_COPY_BOUNDARY"
+		}
+	}
+	return report.Diagnostic{Code: code, Repo: repo, Message: err.Error()}
 }
 
 type sourceLockCandidate struct {
