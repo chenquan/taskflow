@@ -16,7 +16,6 @@ import (
 	"github.com/chenquan/taskflow/internal/fsx"
 	"github.com/chenquan/taskflow/internal/git"
 	"github.com/chenquan/taskflow/internal/lock"
-	"github.com/chenquan/taskflow/internal/overlay"
 	"github.com/chenquan/taskflow/internal/ownership"
 	"github.com/chenquan/taskflow/internal/plan"
 	"github.com/chenquan/taskflow/internal/report"
@@ -35,7 +34,6 @@ func New() Service {
 type CreateOptions struct {
 	TasksRoot, TaskID string
 	Repositories      []string
-	Local             []string
 	DryRun            bool
 	Execute           bool
 }
@@ -54,19 +52,14 @@ type createResolution struct {
 }
 
 type repositoryCreatePlan struct {
-	repository              domain.Repository
-	sourceInfo              git.Info
-	target                  string
-	worktreeAction          int
-	overlayAction           int
-	worktreeStatus          string
-	overlayStatus           string
-	overlayReason           string
-	snapshot                overlay.Snapshot
-	hasSnapshot             bool
-	owned                   *ownership.Worktree
-	overlayNeedsPersist     bool
-	overlayNeedsMaterialize bool
+	repository     domain.Repository
+	sourceInfo     git.Info
+	target         string
+	worktreeAction int
+	copyAction     int
+	worktreeStatus string // "create" or "reuse"
+	copyStatus     string // "copy", "repair", or "reuse"
+	owned          *ownership.Worktree
 }
 
 type createPlan struct {
@@ -181,22 +174,14 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 			Branch:     repository.Branch,
 			Target:     repositoryPlan.target,
 		}
-		if repositoryPlan.owned != nil && repositoryPlan.owned.Overlay != nil {
-			copied := *repositoryPlan.owned.Overlay
-			copied.Paths = append([]string(nil), copied.Paths...)
-			copied.Files = append([]domain.OverlayFile(nil), copied.Files...)
-			entry.Overlay = &copied
+		// A missing target must receive a fresh snapshot even when an older
+		// attempt recorded a complete copy: the copied workspace is gone.
+		sourceCopy := ownership.SourceCopy{Source: repository.Source, Target: repositoryPlan.target, Status: "pending"}
+		if repositoryPlan.owned != nil && repositoryPlan.owned.SourceCopy != nil {
+			sourceCopy = *repositoryPlan.owned.SourceCopy
 		}
-		if repositoryPlan.hasSnapshot && len(repositoryPlan.snapshot.Files) > 0 && repositoryPlan.owned == nil {
-			entry.Overlay = ownershipOverlay(repository.Source, repositoryPlan.target, repositoryPlan.snapshot, "pending")
-		}
-		if repositoryPlan.overlayNeedsPersist && repositoryPlan.hasSnapshot && len(repositoryPlan.snapshot.Files) > 0 {
-			status := "pending"
-			if entry.Overlay != nil && entry.Overlay.Status == "pending" {
-				status = entry.Overlay.Status
-			}
-			entry.Overlay = ownershipOverlay(repository.Source, repositoryPlan.target, repositoryPlan.snapshot, status)
-		}
+		sourceCopy.Status = "pending"
+		entry.SourceCopy = &sourceCopy
 		manifest.Add(entry)
 		ownershipChanged = true
 	}
@@ -221,42 +206,54 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 		if repositoryPlan.worktreeStatus == "create" {
 			if err = os.MkdirAll(filepath.Dir(repositoryPlan.target), 0755); err != nil {
 				items[repositoryPlan.worktreeAction].Status = "failed"
-				items[repositoryPlan.overlayAction].Status = "blocked"
+				items[repositoryPlan.copyAction].Status = "blocked"
 				res.Data = createData(resolved.task, items, false)
 				res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
 				return res, report.ExitPartial
 			}
-			if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, repositoryPlan.target, repository.Base, resolved.trackBase); err != nil {
+			if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, repositoryPlan.target, repository.Base, resolved.trackBase, true); err != nil {
 				items[repositoryPlan.worktreeAction].Status = "failed"
-				items[repositoryPlan.overlayAction].Status = "blocked"
+				items[repositoryPlan.copyAction].Status = "blocked"
 				res.Data = createData(resolved.task, items, false)
 				res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
 				return res, report.ExitPartial
 			}
 			items[repositoryPlan.worktreeAction].Status = "created"
 		}
-		if !repositoryPlan.overlayNeedsMaterialize {
+		if repositoryPlan.copyStatus == "reuse" {
 			continue
 		}
-		_, err = overlay.Materialize(ctx, repository.Source, repositoryPlan.target, repositoryPlan.snapshot)
-		if err != nil {
-			items[repositoryPlan.overlayAction].Status = "failed"
+		// `--no-checkout` registration leaves the index empty; populate it
+		// from HEAD before copying so tracked source modifications surface as
+		// normal unstaged changes. The mixed reset is idempotent, so repairs
+		// of interrupted registrations stay correct.
+		if err = s.Git.ResetIndex(ctx, repositoryPlan.target); err != nil {
+			items[repositoryPlan.copyAction].Status = "failed"
 			res.Data = createData(resolved.task, items, false)
-			res.Fail(overlayDiagnostic(repository.Name, err))
+			res.Fail(report.Diagnostic{Code: "SOURCE_INDEX_RESET_FAILED", Repo: repository.Name, Message: err.Error()})
+			return res, report.ExitPartial
+		}
+		stats, err := fsx.CopyTree(repository.Source, repositoryPlan.target)
+		if err != nil {
+			items[repositoryPlan.copyAction].Status = "failed"
+			res.Data = createData(resolved.task, items, false)
+			res.Fail(copyDiagnostic(repository.Name, err))
 			return res, report.ExitPartial
 		}
 		if repositoryPlan.worktreeStatus == "create" {
-			items[repositoryPlan.overlayAction].Status = "copied"
+			items[repositoryPlan.copyAction].Status = "copied"
 		} else {
-			items[repositoryPlan.overlayAction].Status = "repaired"
+			items[repositoryPlan.copyAction].Status = "repaired"
 		}
+		items[repositoryPlan.copyAction].FileCount = int(stats.Entries)
+		items[repositoryPlan.copyAction].TotalBytes = stats.Bytes
 		owned := manifestEntry(&manifest, repository.Name, repositoryPlan.target)
-		if owned == nil || owned.Overlay == nil {
+		if owned == nil || owned.SourceCopy == nil {
 			res.Data = createData(resolved.task, items, false)
-			res.Fail(report.Diagnostic{Code: "WRITE_OWNERSHIP_FAILED", Repo: repository.Name, Message: "overlay ownership entry is missing", Hint: ownership.Path(resolved.task.Task.Root)})
+			res.Fail(report.Diagnostic{Code: "WRITE_OWNERSHIP_FAILED", Repo: repository.Name, Message: "source-copy ownership entry is missing", Hint: ownership.Path(resolved.task.Task.Root)})
 			return res, report.ExitPartial
 		}
-		owned.Overlay.Status = "complete"
+		owned.SourceCopy.Status = "complete"
 		if err = ownership.Save(resolved.task.Task.Root, manifest); err != nil {
 			res.Data = createData(resolved.task, items, false)
 			res.Fail(report.Diagnostic{Code: "WRITE_OWNERSHIP_FAILED", Repo: repository.Name, Message: err.Error(), Hint: ownership.Path(resolved.task.Task.Root)})
@@ -487,16 +484,6 @@ func (s Service) preflightDelete(ctx context.Context, task domain.Task, manifest
 			if targetInfo.Dirty && !force {
 				return nil, &report.Diagnostic{Code: "WORKTREE_DIRTY", Repo: repository.Name, Message: fmt.Sprintf("worktree %s has uncommitted or untracked changes", owned.Target)}, report.ExitConflict
 			}
-			if owned.Overlay != nil {
-				hasOverlayFiles, overlayErr := overlay.HasExistingFiles(owned.Target, snapshotFromOwnership(*owned.Overlay))
-				if overlayErr != nil {
-					diagnostic := overlayDiagnostic(repository.Name, overlayErr)
-					return nil, &diagnostic, report.ExitConflict
-				}
-				if hasOverlayFiles && !force {
-					return nil, &report.Diagnostic{Code: "WORKTREE_DIRTY", Repo: repository.Name, Message: fmt.Sprintf("worktree %s contains copied overlay files", owned.Target)}, report.ExitConflict
-				}
-			}
 		}
 		if !targetRegistered {
 			if _, statErr := os.Stat(owned.Target); statErr == nil {
@@ -685,10 +672,10 @@ func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOp
 		}
 		task = domain.Task{Version: domain.ConfigVersion, Task: domain.TaskInfo{ID: o.TaskID, Root: taskRoot}}
 	}
-	if configurationExists && (len(o.Repositories) > 0 || len(o.Local) > 0) {
+	if configurationExists && len(o.Repositories) > 0 {
 		return createResolution{}, &report.Diagnostic{
 			Code:    "CONFIG_EDIT_REQUIRED",
-			Message: "taskflow.yaml already exists; edit it directly and rerun create without --repo or --local",
+			Message: "taskflow.yaml already exists; edit it directly and rerun create without --repo",
 			Hint:    configPath,
 		}, report.ExitConfig
 	}
@@ -710,39 +697,10 @@ func (s Service) resolveCreate(ctx context.Context, tasksRoot string, o CreateOp
 		}
 		task.Repositories = append(task.Repositories, repository)
 	}
-	if err := applyLocalDeclarations(&task, o.Local); err != nil {
-		return createResolution{}, &report.Diagnostic{Code: "INVALID_OVERLAY_CONFIGURATION", Message: err.Error()}, report.ExitConfig
-	}
 	if err := config.Validate(&task); err != nil {
 		return createResolution{}, &report.Diagnostic{Code: "INVALID_CONFIGURATION", Message: err.Error()}, report.ExitConfig
 	}
 	return createResolution{task: task, configurationChanged: true, trackBase: false}, nil, report.ExitOK
-}
-
-func applyLocalDeclarations(task *domain.Task, declarations []string) error {
-	if len(declarations) == 0 {
-		return nil
-	}
-	byName := make(map[string]*domain.Repository, len(task.Repositories))
-	for index := range task.Repositories {
-		repository := &task.Repositories[index]
-		byName[repository.Name] = repository
-	}
-	for _, raw := range declarations {
-		parts := strings.SplitN(raw, "=", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return fmt.Errorf("--local must use repository=source-relative-path")
-		}
-		repository, ok := byName[parts[0]]
-		if !ok {
-			return fmt.Errorf("--local references unknown repository %q", parts[0])
-		}
-		if repository.Local == nil {
-			repository.Local = &domain.LocalOverlay{}
-		}
-		repository.Local.Paths = append(repository.Local.Paths, parts[1])
-	}
-	return nil
 }
 
 func resolveRepository(taskID, raw string) (domain.Repository, error) {
@@ -845,16 +803,20 @@ func (s Service) preflightCreate(ctx context.Context, task domain.Task) (*create
 	prepared := &createPlan{task: task, actions: items, manifest: manifest, repositories: make([]repositoryCreatePlan, 0, len(task.Repositories))}
 	for index, repository := range task.Repositories {
 		worktreeAction := index * 2
-		overlayAction := worktreeAction + 1
+		copyAction := worktreeAction + 1
 		target := filepath.Join(task.Task.Root, repository.Worktree)
 		items[worktreeAction].Target = target
-		items[overlayAction].Target = target
+		items[copyAction].Target = target
+		items[copyAction].Source = repository.Source
 		sourceInfo, err := s.Git.Inspect(ctx, repository.Source)
 		if err != nil || sourceInfo.CommonDir == "" {
 			return nil, &report.Diagnostic{Code: "NOT_GIT_REPOSITORY", Repo: repository.Name, Message: gitErrorMessage("inspect configured source", err)}, report.ExitEnvironment
 		}
 		if !s.Git.HasRef(ctx, repository.Source, repository.Base) {
 			return nil, &report.Diagnostic{Code: "BASE_REF_NOT_FOUND", Repo: repository.Name, Message: "base ref " + repository.Base + " does not exist locally"}, report.ExitEnvironment
+		}
+		if fsx.Within(repository.Source, target) || fsx.Within(target, repository.Source) {
+			return nil, &report.Diagnostic{Code: "SOURCE_COPY_BOUNDARY", Repo: repository.Name, Message: fmt.Sprintf("source %s and target %s must not contain one another", repository.Source, target)}, report.ExitConflict
 		}
 		worktrees, err := s.Git.Worktrees(ctx, repository.Source)
 		if err != nil {
@@ -895,7 +857,7 @@ func (s Service) preflightCreate(ctx context.Context, task domain.Task) (*create
 			sourceInfo:     sourceInfo,
 			target:         target,
 			worktreeAction: worktreeAction,
-			overlayAction:  overlayAction,
+			copyAction:     copyAction,
 			worktreeStatus: items[worktreeAction].Status,
 		}
 		owned, hasOwned := ownedByRepo[repository.Name]
@@ -906,148 +868,40 @@ func (s Service) preflightCreate(ctx context.Context, task domain.Task) (*create
 			copied := owned
 			repositoryPlan.owned = &copied
 		}
-
-		localPaths := []string{}
-		if repository.Local != nil {
-			localPaths = append(localPaths, repository.Local.Paths...)
-		}
-		if hasOwned && owned.Overlay != nil {
-			if !samePath(owned.Overlay.Source, repository.Source) || !samePath(owned.Overlay.Target, target) || !equalStrings(owned.Overlay.Paths, localPaths) {
-				return nil, &report.Diagnostic{Code: "OVERLAY_OWNERSHIP_MISMATCH", Repo: repository.Name, Message: "overlay ownership snapshot does not match the current source, target, or local.paths"}, report.ExitConflict
-			}
-			repositoryPlan.snapshot = snapshotFromOwnership(*owned.Overlay)
-			repositoryPlan.hasSnapshot = true
-			if err := s.validateOverlayBase(ctx, repository, repositoryPlan.snapshot); err != nil {
-				return nil, err, overlayPreflightExit(err)
-			}
-			if owned.Overlay.Status == "pending" {
-				if err := overlay.VerifySource(repository.Source, repositoryPlan.snapshot); err != nil {
-					diagnostic := overlayDiagnostic(repository.Name, err)
-					return nil, &diagnostic, report.ExitConflict
-				}
-				if matched {
-					if _, err := overlay.CheckDestinations(target, repositoryPlan.snapshot); err != nil {
-						diagnostic := overlayDiagnostic(repository.Name, err)
-						return nil, &diagnostic, report.ExitConflict
-					}
-				}
-				repositoryPlan.overlayStatus = "repair"
-				repositoryPlan.overlayNeedsMaterialize = len(repositoryPlan.snapshot.Files) > 0
-			} else if matched {
-				checks, err := overlay.CheckDestinations(target, repositoryPlan.snapshot)
-				if err != nil {
-					diagnostic := overlayDiagnostic(repository.Name, err)
-					return nil, &diagnostic, report.ExitConflict
-				}
-				for _, check := range checks {
-					if check.State != "match" {
-						return nil, &report.Diagnostic{Code: "OVERLAY_INCOMPLETE", Repo: repository.Name, Message: fmt.Sprintf("completed overlay file %s is missing from %s", check.Path, target)}, report.ExitConflict
-					}
-				}
-				repositoryPlan.overlayStatus = "reuse"
+		switch {
+		case !matched:
+			repositoryPlan.copyStatus = "copy"
+		case !hasOwned || owned.SourceCopy == nil:
+			// A matching worktree without a pending Taskflow copy record is
+			// never populated implicitly.
+			repositoryPlan.copyStatus = "reuse"
+			if hasOwned {
+				items[copyAction].Reason = "matching worktree has no source-copy record"
 			} else {
-				if owned.Overlay.Status == "complete" {
-					if err := overlay.VerifySource(repository.Source, repositoryPlan.snapshot); err != nil {
-						diagnostic := overlayDiagnostic(repository.Name, err)
-						return nil, &diagnostic, report.ExitConflict
-					}
-					repositoryPlan.overlayNeedsPersist = len(repositoryPlan.snapshot.Files) > 0
-				}
-				repositoryPlan.overlayStatus = "repair"
-				repositoryPlan.overlayNeedsMaterialize = len(repositoryPlan.snapshot.Files) > 0
+				items[copyAction].Reason = "matching worktree is not Taskflow-owned"
 			}
-		} else {
-			var snapshot overlay.Snapshot
-			if len(localPaths) > 0 {
-				snapshot, err = overlay.Discover(ctx, s.Git, repository.Source, localPaths)
-				if err != nil {
-					diagnostic := overlayDiagnostic(repository.Name, err)
-					return nil, &diagnostic, overlayPreflightExit(&diagnostic)
-				}
-			}
-			repositoryPlan.snapshot = snapshot
-			repositoryPlan.hasSnapshot = len(localPaths) > 0
-			if err := s.validateOverlayBase(ctx, repository, snapshot); err != nil {
-				return nil, err, overlayPreflightExit(err)
-			}
-			if !matched && len(snapshot.Files) > 0 {
-				repositoryPlan.overlayStatus = "copy"
-				repositoryPlan.overlayNeedsMaterialize = true
-				repositoryPlan.overlayNeedsPersist = true
-			} else if len(snapshot.Files) == 0 {
-				repositoryPlan.overlayStatus = "skipped"
-				repositoryPlan.overlayReason = "no selected local files"
-			} else {
-				repositoryPlan.overlayStatus = "skipped"
-				if hasOwned {
-					repositoryPlan.overlayReason = "matching worktree has no Taskflow overlay snapshot"
-				} else {
-					repositoryPlan.overlayReason = "matching worktree is not Taskflow-owned"
-				}
-			}
+		case owned.SourceCopy.Status == "pending":
+			repositoryPlan.copyStatus = "repair"
+		default:
+			repositoryPlan.copyStatus = "reuse"
 		}
-		setOverlayItem(&items[overlayAction], repositoryPlan.overlayStatus, repositoryPlan.overlayReason, repositoryPlan.snapshot)
+		setCopyItem(&items[copyAction], repositoryPlan.copyStatus)
 		prepared.repositories = append(prepared.repositories, repositoryPlan)
 	}
 	return prepared, nil, report.ExitOK
 }
 
-func (s Service) validateOverlayBase(ctx context.Context, repository domain.Repository, snapshot overlay.Snapshot) *report.Diagnostic {
-	if len(snapshot.Files) == 0 {
-		return nil
-	}
-	basePaths, err := s.Git.BasePaths(ctx, repository.Source, repository.Base)
-	if err != nil {
-		return &report.Diagnostic{Code: "BASE_TREE_INSPECTION_FAILED", Repo: repository.Name, Message: err.Error()}
-	}
-	if err := overlay.ValidateBaseCollisions(snapshot, basePaths); err != nil {
-		diagnostic := overlayDiagnostic(repository.Name, err)
-		return &diagnostic
-	}
-	return nil
-}
-
-func overlayPreflightExit(diagnostic *report.Diagnostic) report.ExitCode {
-	if diagnostic != nil && diagnostic.Code == overlay.CodeBaseConflict {
-		return report.ExitConflict
-	}
-	return report.ExitEnvironment
-}
-
-func setOverlayItem(item *plan.Item, status, reason string, snapshot overlay.Snapshot) {
+func setCopyItem(item *plan.Item, status string) {
 	item.Status = status
-	item.Reason = reason
-	item.Files = append([]domain.OverlayFile(nil), snapshot.Files...)
-	item.FileCount = len(snapshot.Files)
-	item.TotalBytes = snapshot.TotalBytes
 	switch status {
 	case "copy":
-		item.Description = fmt.Sprintf("COPY local overlay %s", item.Target)
+		item.Description = fmt.Sprintf("COPY source %s -> %s", item.Source, item.Target)
 	case "repair":
-		item.Description = fmt.Sprintf("REPAIR local overlay %s", item.Target)
+		item.Description = fmt.Sprintf("REPAIR source copy %s -> %s", item.Source, item.Target)
 	case "reuse":
-		item.Description = fmt.Sprintf("REUSE local overlay %s", item.Target)
+		item.Description = fmt.Sprintf("REUSE source copy %s -> %s", item.Source, item.Target)
 	default:
-		item.Description = fmt.Sprintf("SKIP local overlay %s", item.Target)
-	}
-}
-
-func snapshotFromOwnership(saved ownership.Overlay) overlay.Snapshot {
-	return overlay.Snapshot{
-		Paths:      append([]string(nil), saved.Paths...),
-		Files:      append([]domain.OverlayFile(nil), saved.Files...),
-		TotalBytes: saved.TotalBytes,
-	}
-}
-
-func ownershipOverlay(source, target string, snapshot overlay.Snapshot, status string) *ownership.Overlay {
-	return &ownership.Overlay{
-		Source:     source,
-		Target:     target,
-		Paths:      append([]string(nil), snapshot.Paths...),
-		Files:      append([]domain.OverlayFile(nil), snapshot.Files...),
-		TotalBytes: snapshot.TotalBytes,
-		Status:     status,
+		item.Description = fmt.Sprintf("SKIP source copy %s", item.Target)
 	}
 }
 
@@ -1061,23 +915,18 @@ func manifestEntry(manifest *ownership.Manifest, repository, target string) *own
 	return nil
 }
 
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
+func copyDiagnostic(repo string, err error) report.Diagnostic {
+	code := "SOURCE_COPY_FAILED"
+	var copyErr *fsx.CopyError
+	if errors.As(err, &copyErr) {
+		switch copyErr.Op {
+		case "unsupported-entry":
+			code = "SOURCE_COPY_UNSUPPORTED_ENTRY"
+		case "symlink", "readlink":
+			code = "SOURCE_COPY_SYMLINK_FAILED"
+		case "boundary":
+			code = "SOURCE_COPY_BOUNDARY"
 		}
-	}
-	return true
-}
-
-func overlayDiagnostic(repo string, err error) report.Diagnostic {
-	code := "OVERLAY_COPY_FAILED"
-	var overlayErr *overlay.Error
-	if errors.As(err, &overlayErr) && overlayErr.Code != "" {
-		code = overlayErr.Code
 	}
 	return report.Diagnostic{Code: code, Repo: repo, Message: err.Error()}
 }

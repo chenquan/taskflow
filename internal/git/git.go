@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -100,87 +99,13 @@ func (c Client) HasRef(ctx context.Context, path, ref string) bool {
 	return err == nil
 }
 
-// UntrackedPaths returns source-relative paths that are not tracked and are
-// not ignored by Git. The command deliberately uses NUL-delimited output so
-// valid paths containing whitespace or newlines remain unambiguous.
-func (c Client) UntrackedPaths(ctx context.Context, path string, pathspecs []string) ([]string, error) {
-	return c.listFiles(ctx, path, []string{"--others", "--exclude-standard"}, pathspecs)
-}
-
-// IgnoredPaths returns explicitly selected ignored, untracked paths. Ignored
-// files are only returned when the caller asks for them; there is no implicit
-// bulk ignored-file discovery in Taskflow.
-func (c Client) IgnoredPaths(ctx context.Context, path string, pathspecs []string) ([]string, error) {
-	return c.listFiles(ctx, path, []string{"--others", "--ignored", "--exclude-standard"}, pathspecs)
-}
-
-// TrackedPaths returns source-relative tracked paths matching the supplied
-// pathspecs. It is used to reject an explicitly selected tracked file while
-// allowing tracked files inside a selected directory to remain untouched.
-func (c Client) TrackedPaths(ctx context.Context, path string, pathspecs []string) ([]string, error) {
-	return c.listFiles(ctx, path, nil, pathspecs)
-}
-
-// BasePaths returns all paths present in a base tree. The result is used for
-// read-only file/directory collision checks before a worktree is created.
-func (c Client) BasePaths(ctx context.Context, path, base string) ([]string, error) {
-	args := []string{"-C", path, "ls-tree", "-r", "-z", "--name-only", base, "--"}
-	r, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: args})
-	if err != nil {
-		return nil, gitCommandError("list base tree paths", r)
-	}
-	return parseNULPaths(r.Stdout), nil
-}
-
-func (c Client) listFiles(ctx context.Context, path string, options, pathspecs []string) ([]string, error) {
-	args := []string{"-C", path, "ls-files", "-z"}
-	args = append(args, options...)
-	args = append(args, "--")
-	args = append(args, pathspecs...)
-	r, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: args})
-	if err != nil {
-		return nil, gitCommandError("list Git paths", r)
-	}
-	return parseNULPaths(r.Stdout), nil
-}
-
-// SelectedLocalPaths unions untracked and ignored paths in stable order. The
-// caller still validates each returned path with lstat; Git only answers the
-// tracked/ignored classification question.
-func (c Client) SelectedLocalPaths(ctx context.Context, path string, pathspecs []string) ([]string, error) {
-	untracked, err := c.UntrackedPaths(ctx, path, pathspecs)
-	if err != nil {
-		return nil, err
-	}
-	ignored, err := c.IgnoredPaths(ctx, path, pathspecs)
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]struct{}, len(untracked)+len(ignored))
-	paths := make([]string, 0, len(untracked)+len(ignored))
-	for _, candidate := range append(untracked, ignored...) {
-		if _, exists := seen[candidate]; exists {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		paths = append(paths, candidate)
-	}
-	sort.Strings(paths)
-	return paths, nil
-}
-
-func parseNULPaths(output string) []string {
-	if output == "" {
-		return []string{}
-	}
-	parts := strings.Split(output, "\x00")
-	paths := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part != "" {
-			paths = append(paths, part)
-		}
-	}
-	return paths
+// ResetIndex populates a worktree index from HEAD without touching working
+// tree files. `git worktree add --no-checkout` leaves the index empty, so a
+// mixed reset is required before copied files can be compared against the
+// configured base.
+func (c Client) ResetIndex(ctx context.Context, path string) error {
+	_, err := c.Runner.Run(ctx, execx.CommandSpec{Executable: "git", Args: []string{"-C", path, "reset", "--quiet"}})
+	return err
 }
 
 func gitCommandError(prefix string, result execx.Result) error {
@@ -245,8 +170,14 @@ func (c Client) Worktrees(ctx context.Context, path string) ([]Worktree, error) 
 	flush()
 	return result, nil
 }
-func (c Client) AddWorktree(ctx context.Context, source, branch, target, base string, trackBase bool) error {
+// AddWorktree registers a worktree from the configured base. With noCheckout
+// the working tree and index stay empty so the caller can populate the index
+// and copy a source snapshot without overwriting base files.
+func (c Client) AddWorktree(ctx context.Context, source, branch, target, base string, trackBase, noCheckout bool) error {
 	args := []string{"-C", source, "worktree", "add"}
+	if noCheckout {
+		args = append(args, "--no-checkout")
+	}
 	if c.HasRef(ctx, source, "refs/heads/"+branch) {
 		args = append(args, target, branch)
 	} else {

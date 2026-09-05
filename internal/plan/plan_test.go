@@ -11,7 +11,7 @@ func TestBuildPreservesRepositoryOrder(t *testing.T) {
 	if err != nil || len(items) != 4 || items[0].Repo != "b" || items[2].Repo != "a" {
 		t.Fatalf("%v %#v", err, items)
 	}
-	if items[0].Status != "" || items[0].Kind != "worktree" || items[1].Kind != "overlay" || items[3].Kind != "overlay" {
+	if items[0].Status != "" || items[0].Kind != "worktree" || items[1].Kind != "source-copy" || items[3].Kind != "source-copy" {
 		t.Fatalf("unexpected item: %#v", items[0])
 	}
 }

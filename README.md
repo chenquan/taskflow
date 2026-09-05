@@ -8,9 +8,9 @@ Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、�
 
 - 一个任务按稳定顺序关联多个本地 Git 仓库
 - 使用 Git worktree 隔离任务开发环境
-- 显式声明并安全复制每个仓库的本地文件 overlay（包括主动选择的 ignored 文件）
+- 创建新 worktree 时复制 source 的完整工作目录（包括未提交修改、untracked 和 ignored 文件）
 - dry-run、全量 preflight、任务锁和 source/branch 锁
-- 基于实时 Git 事实的幂等创建和中断后重试
+- 基于实时 Git 事实和 source-copy 状态的幂等创建与中断后重试
 - bundled skill 根据 taskflow.yaml 生成原生 Codex/Claude 命令，将所有仓库关联到工作区
 - 基于 ownership manifest 的任务资源 dry-run 和安全清理
 - 将 bundled Taskflow skill 安装到 Codex 或 Claude 的全局或项目级目录
@@ -67,15 +67,11 @@ taskflow skill install --project --tool claude
 taskflow --tasks-root ~/tasks create REFUND-123 \
   --repo order-service=~/projects/order-service \
   --repo payment-sdk=~/projects/payment-sdk \
-  --local order-service=.env.local \
-  --local payment-sdk=config/dev/ \
   --dry-run
 
 taskflow --tasks-root ~/tasks create REFUND-123 \
   --repo order-service=~/projects/order-service \
   --repo payment-sdk=~/projects/payment-sdk \
-  --local order-service=.env.local \
-  --local payment-sdk=config/dev/ \
   --execute
 
 # execute 完成后，bundled skill 必须再次确认所有 worktree 为 reuse
@@ -90,36 +86,36 @@ taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks delete REFUND-123 --execute
 ```
 
-`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、ownership、worktree、分支或锁目录；它会列出每个 overlay 递归选择的文件、数量和总字节数。新任务的 execute 会在完整 preflight 后写入初始配置、pending overlay 快照并创建缺失的 worktree，再以不覆盖方式发布文件。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
+`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、ownership、worktree、分支或锁目录，也不枚举或读取将要复制的内容；它列出每个仓库的 worktree action 和 source-copy action。新任务的 execute 会在完整 preflight 后写入初始配置、记录 pending source-copy 状态，再用 `git worktree add --no-checkout` 注册缺失的 worktree、把 index 重建为 base 内容，最后把 source 工作目录完整复制进目标。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
 
-overlay 只接受 source-relative 的精确文件或目录。没有 `local.paths` 就不会隐式复制任何 untracked 或 ignored 文件；ignored 文件必须通过 `--local` 或 taskflow.yaml 明确选择。`.git`、路径逃逸、tracked 文件、符号链接、特殊文件，以及与 base tree 冲突的目标都会在 mutation 前失败。
+复制覆盖 source 工作目录的全部内容：tracked 文件的未提交修改、untracked 文件和 ignored 文件。`git status` 在新 worktree 中因此通常显示为 dirty，这是预期行为。除 source 根目录及任意嵌套层级的 `.git` 条目外不会排除任何文件；嵌套的 Git 元数据（其他 checkout 的注册文件或内嵌仓库）不会被复制。source 和 target 不允许互相包含。完成后的快照不会随 source 后续变化刷新。
 
 新任务先用带 `--repo` 的 dry-run 预览，用户批准后执行 create；execute 完成后，bundled skill 必须再次运行不带 `--repo` 的 `taskflow create <task-id> --dry-run`，只有所有 repository 都报告 `reuse` 时才生成命令。已有任务也从这次不带 `--repo` 的 dry-run 开始。它使用第一个 worktree 作为 cwd，将后续 worktree 和任务根目录作为绝对路径 `--add-dir` 参数，并按用户目标 shell 进行安全引用和转义：POSIX shell 使用单引号，PowerShell 使用 `Set-Location -LiteralPath` 和 `$env:...`，cmd.exe 使用 `cd /d "..."` 和 `set "...=1"`。复杂 cmd 路径无法可靠转义时改用 PowerShell。命令由用户在自己的终端执行，匹配但 dirty 的 worktree 不会阻止生成。不要加入 `--worktree` 或 `--worktree=...`，避免嵌套 worktree。
 
 ## 重试和修改配置
 
-创建是基于实时 Git 事实的 reconciliation，不依赖持久 action state：
+创建基于实时 Git 事实和 source-copy 状态做 reconciliation：
 
 ```bash
 taskflow --tasks-root ~/tasks create REFUND-123 --execute
 ```
 
-已存在且 source common directory、branch、target path 都匹配的 worktree 会被复用；缺失的会被创建；不匹配的目标不会被删除或覆盖。若 overlay 复制中断，ownership.json 会保留 pending 快照；修复外部原因后重试只补缺失文件，hash 相同的文件会被接受，发生变化的目标文件会报告冲突。完成后的 overlay 是创建时快照，不会随 source 后续变化刷新。
+已存在且 source common directory、branch、target path 都匹配的 worktree 会被复用；缺失的会被创建；不匹配的目标不会被删除或覆盖。若完整复制中断，ownership.json 会保留 pending 的 source-copy 状态；修复外部原因后重试会对该目标重新执行完整复制（pending 目标目录缺失时先重新注册再复制）。完成后的快照是创建时快照，不会随 source 后续变化刷新；pending 期间不要在目标中工作，等待重试完成。
 
-已有任务的仓库集合和 overlay 由用户或 AI 直接维护 taskflow.yaml。修改配置后，先运行不带 `--repo` 或 `--local` 的 dry-run，再显式执行：
+已有任务的仓库集合由用户或 AI 直接维护 taskflow.yaml。修改配置后，先运行不带 `--repo` 的 dry-run，再显式执行：
 
 ```bash
-# 编辑 ~/tasks/REFUND-123/taskflow.yaml，增加 inventory-service 或 repositories[].local.paths
+# 编辑 ~/tasks/REFUND-123/taskflow.yaml，增加 inventory-service
 
 taskflow --tasks-root ~/tasks create REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks create REFUND-123 --execute
 ```
 
-taskflow.yaml 中删除仓库或 local path 不会删除已有 worktree 或已复制文件；修改 source、branch、base、worktree 或已登记 overlay 的 paths 后如果实时 Git/ownership 状态不匹配，create 会在 mutation 前返回冲突。已有 taskflow.yaml 时传入 `--repo` 或 `--local` 会返回 `CONFIG_EDIT_REQUIRED`，不会执行追加或修改。删除任务要求 ownership manifest 与当前 taskflow.yaml 完全匹配；手工创建或已被修改配置引用的 worktree 不会被自动删除。
+taskflow.yaml 中删除仓库不会删除已有 worktree；修改 source、branch、base、worktree 后如果实时 Git/ownership 状态不匹配，create 会在 mutation 前返回冲突。已有 taskflow.yaml 时传入 `--repo` 会返回 `CONFIG_EDIT_REQUIRED`，不会执行追加或修改。删除任务要求 ownership manifest 与当前 taskflow.yaml 完全匹配；手工创建或已被修改配置引用的 worktree 不会被自动删除。
 
 ## 删除任务
 
-删除默认只预览，不改变 Git 或文件系统。overlay 文件是普通 worktree 本地文件，因此会使 worktree dirty：
+删除默认只预览，不改变 Git 或文件系统。复制的快照通常使 worktree dirty（tracked 修改和 untracked 文件都是普通工作区变更；仅含 ignored 文件的快照按 Git 语义视为干净）：
 
 ```bash
 taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
@@ -160,10 +156,6 @@ repositories:
     base: origin/main
     branch: feature/refund-123
     worktree: worktrees/order-service
-    local:
-      paths:
-        - .env.local
-        - config/dev/
 
   - name: payment-sdk
     source: /Users/me/projects/payment-sdk
@@ -173,7 +165,7 @@ repositories:
 ```
 
 `source` 使用绝对路径，`base` 必须在本地可解析，`worktree` 必须位于任务的 `worktrees/` 目录内。Taskflow 不隐式 fetch；请在 source 仓库准备好 base 后再重试 create。
-`local.paths` 中的目录会递归选择其中未被 Git 跟踪的 regular files；tracked 文件不会作为 overlay 复制。显式选择的 ignored 文件允许复制。计划会显示每个 source-relative 文件和大小，目标已有不同内容时只报告冲突，不会覆盖。
+创建新 worktree 时 source 的完整工作目录会被复制进目标（含 ignored 文件），因此 source 中的敏感或超大未忽略内容也会进入 worktree；dry-run 和 execute 输出都会显示复制 action 及其条目与字节统计。
 
 首次通过 `--repo` 声明仓库时，Taskflow 默认读取该 source 的 `origin/HEAD`，并将其解析到本地可用的远程默认分支作为 base；同时生成 `feature/<task-id>` 分支，但只使用该远程分支的提交作为起点，不建立 upstream 关联。例如 `origin/HEAD` 指向 `origin/main` 时，配置中的 base 是 `origin/main`，但生成的 worktree 分支不会默认关联 `origin/main`；`origin/master` 等其他远程默认分支同理。`origin/HEAD` 缺失或对应引用不可用时，create 会在写入初始配置或创建 worktree 前失败。已存在配置中的显式 `base` 和 `branch` 保持不变；已有配置的后续修改由用户或 AI 直接编辑 YAML。
 
@@ -183,11 +175,11 @@ execute-mode create 会：
 
 1. 获取任务锁；
 2. 按 canonical Git common directory 和 branch 获取 source lock；
-3. 检查所有 source、base、branch 占用、target、worktree identity、local.paths、文件类型、hash 和 base-tree collision；
-4. 对新任务通过 atomic write 写入初始 taskflow.yaml 和 pending ownership snapshot；已有任务不重写用户配置；
-5. 只创建缺失的 worktree，并在其创建后发布声明的 overlay。
+3. 检查所有 source、base、branch 占用、target、worktree identity 和 source/target 复制边界；
+4. 对新任务通过 atomic write 写入初始 taskflow.yaml 和 pending source-copy 状态；已有任务不重写用户配置；
+5. 只创建缺失的 worktree（`--no-checkout` 注册并将 index 重建为 base），然后复制 source 完整工作目录并在成功后标记 complete。
 
-任何 preflight 冲突都会在 Git 或目标文件 mutation 前返回。Taskflow 的 ownership manifest 只记录由 Taskflow 实际创建的 worktree；结构匹配的手工 worktree 可以被 `create` 复用，但不会注入 overlay 或被 `delete` 清理。
+任何 preflight 冲突都会在 Git 或目标文件 mutation 前返回。Taskflow 的 ownership manifest 只记录由 Taskflow 实际创建的 worktree；结构匹配的手工 worktree 可以被 `create` 复用，但不会被注入 source 快照或被 `delete` 清理。
 
 ## 破坏性兼容边界
 

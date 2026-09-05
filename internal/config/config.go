@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -103,9 +102,6 @@ func Validate(t *domain.Task) error {
 		if r.Worktree == "" {
 			r.Worktree = filepath.Join("worktrees", r.Name)
 		}
-		if err := normalizeLocalOverlay(r); err != nil {
-			return fmt.Errorf("repository %s local: %w", r.Name, err)
-		}
 		target := r.Worktree
 		if !filepath.IsAbs(target) {
 			target = filepath.Join(root, target)
@@ -129,46 +125,4 @@ func Validate(t *domain.Task) error {
 		r.Worktree = rel
 	}
 	return nil
-}
-
-func normalizeLocalOverlay(repository *domain.Repository) error {
-	if repository.Local == nil {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	paths := make([]string, 0, len(repository.Local.Paths))
-	for _, raw := range repository.Local.Paths {
-		if strings.TrimSpace(raw) == "" {
-			return fmt.Errorf("overlay path must not be empty")
-		}
-		portable := strings.ReplaceAll(raw, `\`, "/")
-		if filepath.IsAbs(raw) || strings.HasPrefix(portable, "/") || isWindowsAbsolute(portable) {
-			return fmt.Errorf("overlay path %q must be source-relative", raw)
-		}
-		clean := pathpkg.Clean(portable)
-		if clean == "." {
-			// Selecting the source root is a valid explicit directory overlay.
-			// Its .git directory is excluded during filesystem discovery.
-		} else if clean == ".." || strings.HasPrefix(clean, "../") {
-			return fmt.Errorf("overlay path %q escapes the source", raw)
-		}
-		for _, component := range strings.FieldsFunc(clean, func(r rune) bool {
-			return r == '/' || r == '\\'
-		}) {
-			if component == ".git" {
-				return fmt.Errorf("overlay path %q may not contain .git", raw)
-			}
-		}
-		if _, exists := seen[clean]; exists {
-			return fmt.Errorf("duplicate overlay path %q", clean)
-		}
-		seen[clean] = struct{}{}
-		paths = append(paths, clean)
-	}
-	repository.Local.Paths = paths
-	return nil
-}
-
-func isWindowsAbsolute(path string) bool {
-	return len(path) >= 2 && ((path[0] >= 'a' && path[0] <= 'z') || (path[0] >= 'A' && path[0] <= 'Z')) && path[1] == ':'
 }

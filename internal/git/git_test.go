@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/chenquan/taskflow/internal/execx"
@@ -45,7 +44,7 @@ func TestClientInspectsAndCreatesWorktrees(t *testing.T) {
 		}
 	}
 	target := filepath.Join(t.TempDir(), "feature worktree")
-	if err := client.AddWorktree(context.Background(), root, "feature/test", target, "main", true); err != nil {
+	if err := client.AddWorktree(context.Background(), root, "feature/test", target, "main", true, false); err != nil {
 		t.Fatal(err)
 	}
 	worktrees, err := client.Worktrees(context.Background(), root)
@@ -115,7 +114,7 @@ func TestClientAddWorktreeDefaultDoesNotTrackRemoteBase(t *testing.T) {
 
 	target := filepath.Join(t.TempDir(), "worktree")
 	client := Client{Runner: execx.OSRunner{}}
-	if err := client.AddWorktree(context.Background(), root, "feature/master-base", target, "origin/master", false); err != nil {
+	if err := client.AddWorktree(context.Background(), root, "feature/master-base", target, "origin/master", false, false); err != nil {
 		t.Fatal(err)
 	}
 	info, err := client.Inspect(context.Background(), target)
@@ -130,7 +129,7 @@ func TestClientAddWorktreeDefaultDoesNotTrackRemoteBase(t *testing.T) {
 	}
 
 	trackedTarget := filepath.Join(t.TempDir(), "tracked-worktree")
-	if err := client.AddWorktree(context.Background(), root, "feature/explicit-master", trackedTarget, "origin/master", true); err != nil {
+	if err := client.AddWorktree(context.Background(), root, "feature/explicit-master", trackedTarget, "origin/master", true, false); err != nil {
 		t.Fatal(err)
 	}
 	trackedInfo, err := client.Inspect(context.Background(), trackedTarget)
@@ -142,55 +141,47 @@ func TestClientAddWorktreeDefaultDoesNotTrackRemoteBase(t *testing.T) {
 	}
 }
 
-func TestClientLocalPathQueriesPreserveNULDelimitedNames(t *testing.T) {
+func TestClientNoCheckoutWorktreeStartsWithEmptyIndex(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
 	if out, err := exec.Command("git", "init", "-b", "main", root).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
-	for _, args := range [][]string{{"-C", root, "config", "user.email", "test@example.com"}, {"-C", root, "config", "user.name", "Test"}, {"-C", root, "commit", "--allow-empty", "-m", "init"}} {
+	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("committed"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"-C", root, "config", "user.email", "test@example.com"},
+		{"-C", root, "config", "user.name", "Test"},
+		{"-C", root, "add", "base.txt"},
+		{"-C", root, "commit", "-m", "init"},
+	} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored/\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "ignored"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	normalName := "normal\nname"
-	if runtime.GOOS == "windows" {
-		normalName = "normal name"
-	}
-	normal := filepath.Join(root, normalName)
-	ignored := filepath.Join(root, "ignored", "ignored name")
-	if err := os.WriteFile(normal, []byte("normal"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(ignored, []byte("ignored"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("git", "-C", root, "add", ".gitignore").CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v: %s", err, out)
-	}
-	if out, err := exec.Command("git", "-C", root, "commit", "-m", "ignore").CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v: %s", err, out)
-	}
+	target := filepath.Join(t.TempDir(), "no-checkout")
 	client := Client{Runner: execx.OSRunner{}}
-	untracked, err := client.UntrackedPaths(context.Background(), root, []string{"."})
-	if err != nil || len(untracked) != 1 || untracked[0] != normalName {
-		t.Fatalf("untracked=%#v err=%v", untracked, err)
+	if err := client.AddWorktree(context.Background(), root, "feature/no-checkout", target, "HEAD", true, true); err != nil {
+		t.Fatal(err)
 	}
-	ignoredPaths, err := client.IgnoredPaths(context.Background(), root, []string{"ignored"})
-	if err != nil || len(ignoredPaths) != 1 || ignoredPaths[0] != "ignored/ignored name" {
-		t.Fatalf("ignored=%#v err=%v", ignoredPaths, err)
+	if err := os.WriteFile(filepath.Join(target, "base.txt"), []byte("copied modification"), 0644); err != nil {
+		t.Fatal(err)
 	}
-	tracked, err := client.TrackedPaths(context.Background(), root, []string{".gitignore"})
-	if err != nil || len(tracked) != 1 || tracked[0] != ".gitignore" {
-		t.Fatalf("tracked=%#v err=%v", tracked, err)
+	status, err := exec.Command("git", "-C", target, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("status before reset: %v: %s", err, status)
 	}
-	base, err := client.BasePaths(context.Background(), root, "HEAD")
-	if err != nil || len(base) != 1 || base[0] != ".gitignore" {
-		t.Fatalf("base=%#v err=%v", base, err)
+	if string(status) != "D  base.txt\n?? base.txt\n" {
+		t.Fatalf("--no-checkout did not leave an empty index: %q", status)
+	}
+	if err := client.ResetIndex(context.Background(), target); err != nil {
+		t.Fatalf("ResetIndex: %v", err)
+	}
+	status, err = exec.Command("git", "-C", target, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("status after reset: %v: %s", err, status)
+	}
+	if string(status) != " M base.txt\n" {
+		t.Fatalf("mixed reset did not reconcile the index: %q", status)
 	}
 }

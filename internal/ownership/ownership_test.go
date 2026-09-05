@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/chenquan/taskflow/internal/domain"
 )
 
 func TestSaveAndLoadRoundTrip(t *testing.T) {
@@ -65,30 +63,27 @@ func TestValidateRejectsMalformedEntries(t *testing.T) {
 	}
 }
 
-func TestOverlayOwnershipRoundTripAndLegacyCompatibility(t *testing.T) {
+func TestSourceCopyOwnershipRoundTripAndLegacyCompatibility(t *testing.T) {
 	root := t.TempDir()
-	manifest := New("TASK-OVERLAY")
+	manifest := New("TASK-COPY")
 	manifest.Add(Worktree{
 		Repository: "api",
 		Source:     filepath.Join(root, "source"),
 		CommonDir:  filepath.Join(root, "source", ".git"),
-		Branch:     "feature/task-overlay",
+		Branch:     "feature/task-copy",
 		Target:     filepath.Join(root, "task", "worktrees", "api"),
-		Overlay: &Overlay{
-			Source:     filepath.Join(root, "source"),
-			Target:     filepath.Join(root, "task", "worktrees", "api"),
-			Paths:      []string{".env.local"},
-			Files:      []domain.OverlayFile{{Path: ".env.local", Size: 3, Mode: 0600, SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}},
-			TotalBytes: 3,
-			Status:     "pending",
+		SourceCopy: &SourceCopy{
+			Source: filepath.Join(root, "source"),
+			Target: filepath.Join(root, "task", "worktrees", "api"),
+			Status: "pending",
 		},
 	})
 	if err := Save(root, manifest); err != nil {
 		t.Fatal(err)
 	}
 	loaded, exists, err := Load(root)
-	if err != nil || !exists || loaded.Worktrees[0].Overlay == nil || loaded.Worktrees[0].Overlay.Status != "pending" {
-		t.Fatalf("overlay manifest=%#v exists=%v err=%v", loaded, exists, err)
+	if err != nil || !exists || loaded.Worktrees[0].SourceCopy == nil || loaded.Worktrees[0].SourceCopy.Status != "pending" {
+		t.Fatalf("source-copy manifest=%#v exists=%v err=%v", loaded, exists, err)
 	}
 	legacy := New("LEGACY")
 	legacy.Add(Worktree{Repository: "api", Source: "/source", CommonDir: "/source/.git", Branch: "feature/legacy", Target: "/task/worktrees/api"})

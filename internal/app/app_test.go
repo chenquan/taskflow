@@ -117,7 +117,7 @@ func TestCreateIsIdempotentAndDoesNotPersistState(t *testing.T) {
 		t.Fatalf("repeat create: code=%d result=%#v", code, second)
 	}
 	items := second.Data.(map[string]any)["actions"].([]plan.Item)
-	if len(items) != 2 || items[0].Kind != "worktree" || items[0].Status != "reuse" || items[1].Kind != "overlay" || items[1].Status != "skipped" {
+	if len(items) != 2 || items[0].Kind != "worktree" || items[0].Status != "reuse" || items[1].Kind != "source-copy" || items[1].Status != "reuse" {
 		t.Fatalf("repeat actions: %#v", items)
 	}
 }
@@ -136,7 +136,6 @@ func TestCreateRejectsRepositoryArgumentsForExistingTask(t *testing.T) {
 	}
 	for _, options := range []CreateOptions{
 		{TasksRoot: tasks, TaskID: "EXISTING", Repositories: []string{"two=" + repo2}, DryRun: true},
-		{TasksRoot: tasks, TaskID: "EXISTING", Local: []string{"one=.env.local"}, DryRun: true},
 		{TasksRoot: tasks, TaskID: "EXISTING", Repositories: []string{"malformed"}, Execute: true},
 	} {
 		result, code := service.Create(context.Background(), options)
@@ -278,74 +277,9 @@ func TestCreateRejectsMismatchedTargetBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestCreateBootstrapAndMaterializesLocalOverlay(t *testing.T) {
+func TestCreateCopiesCompleteSourceWorkingTree(t *testing.T) {
 	repo := makeGitRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".env.local"), []byte("PORT=4100\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	nested := filepath.Join(repo, "config", "dev", "settings local")
-	if err := os.MkdirAll(filepath.Dir(nested), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(nested, []byte("debug=true\n"), 0640); err != nil {
-		t.Fatal(err)
-	}
-	tasks := t.TempDir()
-	service := New()
-	options := CreateOptions{TasksRoot: tasks, TaskID: "OVERLAY", Repositories: []string{"app=" + repo}, Local: []string{"app=.env.local", "app=config/dev"}}
-	preview, code := service.Create(context.Background(), CreateOptions{TasksRoot: options.TasksRoot, TaskID: options.TaskID, Repositories: options.Repositories, Local: options.Local, DryRun: true})
-	if code != report.ExitOK || !preview.OK {
-		t.Fatalf("overlay preview: code=%d result=%#v", code, preview)
-	}
-	previewItems := preview.Data.(map[string]any)["actions"].([]plan.Item)
-	if len(previewItems) != 2 || previewItems[0].Status != "create" || previewItems[1].Status != "copy" || previewItems[1].FileCount != 2 {
-		t.Fatalf("overlay preview actions: %#v", previewItems)
-	}
-	if _, err := os.Stat(filepath.Join(tasks, "OVERLAY")); !os.IsNotExist(err) {
-		t.Fatalf("dry-run changed task root: %v", err)
-	}
-	options.Execute = true
-	result, code := service.Create(context.Background(), options)
-	if code != report.ExitOK || !result.OK {
-		t.Fatalf("overlay execute: code=%d result=%#v", code, result)
-	}
-	task, err := service.Load(tasks, "OVERLAY")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if task.Repositories[0].Local == nil || !equalStrings(task.Repositories[0].Local.Paths, []string{".env.local", "config/dev"}) {
-		t.Fatalf("persisted local paths: %#v", task.Repositories[0].Local)
-	}
-	target := filepath.Join(task.Task.Root, task.Repositories[0].Worktree)
-	for _, relative := range []string{".env.local", filepath.Join("config", "dev", "settings local")} {
-		if _, err := os.Stat(filepath.Join(target, relative)); err != nil {
-			t.Fatalf("overlay file %s missing: %v", relative, err)
-		}
-	}
-	manifest, exists, err := ownership.Load(task.Task.Root)
-	if err != nil || !exists || len(manifest.Worktrees) != 1 || manifest.Worktrees[0].Overlay == nil || manifest.Worktrees[0].Overlay.Status != "complete" {
-		t.Fatalf("overlay ownership: manifest=%#v exists=%v err=%v", manifest, exists, err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".env.local"), []byte("PORT=4200\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	second, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "OVERLAY", Execute: true})
-	if code != report.ExitOK || !second.OK {
-		t.Fatalf("overlay repeat: code=%d result=%#v", code, second)
-	}
-	secondItems := second.Data.(map[string]any)["actions"].([]plan.Item)
-	if len(secondItems) != 2 || secondItems[0].Status != "reuse" || secondItems[1].Status != "reuse" {
-		t.Fatalf("overlay repeat actions: %#v", secondItems)
-	}
-	contents, err := os.ReadFile(filepath.Join(target, ".env.local"))
-	if err != nil || string(contents) != "PORT=4100\n" {
-		t.Fatalf("completed overlay was refreshed: %q err=%v", contents, err)
-	}
-}
-
-func TestCreateExplicitlyCopiesIgnoredOverlayFile(t *testing.T) {
-	repo := makeGitRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".env.local\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.log\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"-C", repo, "add", ".gitignore"}, {"-C", repo, "commit", "-m", "ignore"}} {
@@ -353,20 +287,155 @@ func TestCreateExplicitlyCopiesIgnoredOverlayFile(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".env.local"), []byte("TOKEN=secret"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	tasks := t.TempDir()
-	result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "IGNORED", Repositories: []string{"app=" + repo}, Local: []string{"app=.env.local"}, Execute: true})
-	if code != report.ExitOK || !result.OK {
-		t.Fatalf("ignored overlay: code=%d result=%#v", code, result)
+	for _, args := range [][]string{{"-C", repo, "add", "tracked.txt"}, {"-C", repo, "commit", "-m", "tracked"}, {"-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"}} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(tasks, "IGNORED", "worktrees", "app", ".env.local")); err != nil {
-		t.Fatalf("ignored overlay was not copied: %v", err)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed\nmodified\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("untracked"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "ignored.log"), []byte("ignored"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "config", "dev"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "config", "dev", "settings local.env"), []byte("debug=true"), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks := t.TempDir()
+	service := New()
+	preview, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Repositories: []string{"app=" + repo}, DryRun: true})
+	if code != report.ExitOK || !preview.OK {
+		t.Fatalf("preview: code=%d result=%#v", code, preview)
+	}
+	previewItems := preview.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(previewItems) != 2 || previewItems[0].Status != "create" || previewItems[1].Kind != "source-copy" || previewItems[1].Status != "copy" {
+		t.Fatalf("preview actions: %#v", previewItems)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "SNAPSHOT")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run changed task root: %v", err)
+	}
+
+	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Repositories: []string{"app=" + repo}, Execute: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("execute: code=%d result=%#v", code, result)
+	}
+	executeItems := result.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(executeItems) != 2 || executeItems[0].Status != "created" || executeItems[1].Status != "copied" {
+		t.Fatalf("execute actions: %#v", executeItems)
+	}
+	task, err := service.Load(tasks, "SNAPSHOT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(task.Task.Root, task.Repositories[0].Worktree)
+	for _, file := range []string{"tracked.txt", "untracked.txt", "ignored.log", filepath.Join("config", "dev", "settings local.env")} {
+		if _, err := os.Stat(filepath.Join(target, file)); err != nil {
+			t.Fatalf("copied file %s missing: %v", file, err)
+		}
+	}
+	if contents, err := os.ReadFile(filepath.Join(target, "tracked.txt")); err != nil || string(contents) != "committed\nmodified\n" {
+		t.Fatalf("tracked modification not copied: %q err=%v", contents, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, ".git")); err != nil {
+		t.Fatalf("target lost its own git metadata: %v", err)
+	}
+	manifest, exists, err := ownership.Load(task.Task.Root)
+	if err != nil || !exists || len(manifest.Worktrees) != 1 || manifest.Worktrees[0].SourceCopy == nil || manifest.Worktrees[0].SourceCopy.Status != "complete" {
+		t.Fatalf("source-copy ownership: manifest=%#v exists=%v err=%v", manifest, exists, err)
+	}
+
+	status, err := exec.Command("git", "-C", target, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("target status: %v: %s", err, status)
+	}
+	statusText := string(status)
+	if !strings.Contains(statusText, " M tracked.txt") || !strings.Contains(statusText, "?? untracked.txt") {
+		t.Fatalf("copied changes are not normal working-tree changes: %q", statusText)
+	}
+	if strings.Contains(statusText, "D ") || strings.Contains(statusText, "D\t") {
+		t.Fatalf("empty index leaked staged deletions: %q", statusText)
+	}
+
+	// A completed source copy is a creation-time snapshot: later source
+	// changes must not be refreshed into a reused worktree.
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed later\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	second, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Execute: true})
+	if code != report.ExitOK || !second.OK {
+		t.Fatalf("repeat create: code=%d result=%#v", code, second)
+	}
+	secondItems := second.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(secondItems) != 2 || secondItems[0].Status != "reuse" || secondItems[1].Status != "reuse" {
+		t.Fatalf("repeat actions: %#v", secondItems)
+	}
+	if contents, err := os.ReadFile(filepath.Join(target, "tracked.txt")); err != nil || string(contents) != "committed\nmodified\n" {
+		t.Fatalf("completed copy was refreshed: %q err=%v", contents, err)
 	}
 }
 
-func TestCreateDoesNotCopyOverlayIntoMatchingManualWorktree(t *testing.T) {
+func TestCreateKeepsCleanStatusWhenSourceMatchesBase(t *testing.T) {
+	repo := makeGitRepo(t)
+	tasks := t.TempDir()
+	if result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "CLEAN", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("create: code=%d result=%#v", code, result)
+	}
+	target := filepath.Join(tasks, "CLEAN", "worktrees", "app")
+	status, err := exec.Command("git", "-C", target, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("target status: %v: %s", err, status)
+	}
+	if len(strings.TrimSpace(string(status))) != 0 {
+		t.Fatalf("target of a clean source is dirty: %q", status)
+	}
+}
+
+func TestCreateExcludesNestedGitMetadata(t *testing.T) {
+	repo := makeGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"-C", repo, "add", "tracked.txt"}, {"-C", repo, "commit", "-m", "tracked"}} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if output, err := exec.Command("git", "-C", repo, "worktree", "add", "./wt-nested", "-b", "nested").CombinedOutput(); err != nil {
+		t.Fatalf("nested worktree: %v: %s", err, output)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "sub", ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "sub", ".git", "HEAD"), []byte("embedded"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tasks := t.TempDir()
+	if result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "NESTED", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("create: code=%d result=%#v", code, result)
+	}
+	target := filepath.Join(tasks, "NESTED", "worktrees", "app")
+	if _, err := os.Stat(filepath.Join(target, "wt-nested", "tracked.txt")); err != nil {
+		t.Fatalf("nested working files were not copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "wt-nested", ".git")); !os.IsNotExist(err) {
+		t.Fatalf("nested worktree registration was copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "sub", ".git")); !os.IsNotExist(err) {
+		t.Fatalf("embedded repository metadata was copied: %v", err)
+	}
+}
+
+func TestCreateDoesNotCopyIntoMatchingManualWorktree(t *testing.T) {
 	repo := makeGitRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "local.env"), []byte("local"), 0600); err != nil {
 		t.Fatal(err)
@@ -378,7 +447,7 @@ func TestCreateDoesNotCopyOverlayIntoMatchingManualWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := git.Client{Runner: execx.OSRunner{}}
-	if err := client.AddWorktree(context.Background(), repo, "feature/manual", target, "HEAD", false); err != nil {
+	if err := client.AddWorktree(context.Background(), repo, "feature/manual", target, "HEAD", false, false); err != nil {
 		t.Fatal(err)
 	}
 	task := domain.Task{
@@ -390,7 +459,6 @@ func TestCreateDoesNotCopyOverlayIntoMatchingManualWorktree(t *testing.T) {
 			Base:     "HEAD",
 			Branch:   "feature/manual",
 			Worktree: filepath.Join("worktrees", "app"),
-			Local:    &domain.LocalOverlay{Paths: []string{"local.env"}},
 		}},
 	}
 	raw, err := config.Marshal(task)
@@ -405,15 +473,15 @@ func TestCreateDoesNotCopyOverlayIntoMatchingManualWorktree(t *testing.T) {
 		t.Fatalf("manual reuse: code=%d result=%#v", code, result)
 	}
 	items := result.Data.(map[string]any)["actions"].([]plan.Item)
-	if len(items) != 2 || items[0].Status != "reuse" || items[1].Status != "skipped" || items[1].Reason == "" {
+	if len(items) != 2 || items[0].Status != "reuse" || items[1].Status != "reuse" || items[1].Reason == "" {
 		t.Fatalf("manual reuse actions: %#v", items)
 	}
 	if _, err := os.Stat(filepath.Join(target, "local.env")); !os.IsNotExist(err) {
-		t.Fatalf("manual worktree received overlay: %v", err)
+		t.Fatalf("manual worktree received a source copy: %v", err)
 	}
 }
 
-func TestCreateRepairsPendingOverlayWithoutRecreatingWorktree(t *testing.T) {
+func TestCreateRepairsPendingSourceCopyWithoutRecreatingWorktree(t *testing.T) {
 	repo := makeGitRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "one.env"), []byte("one"), 0600); err != nil {
 		t.Fatal(err)
@@ -423,8 +491,8 @@ func TestCreateRepairsPendingOverlayWithoutRecreatingWorktree(t *testing.T) {
 	}
 	tasks := t.TempDir()
 	service := New()
-	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "PENDING", Repositories: []string{"app=" + repo}, Local: []string{"app=one.env", "app=two.env"}, Execute: true}); code != report.ExitOK || !result.OK {
-		t.Fatalf("initial overlay: code=%d result=%#v", code, result)
+	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "PENDING", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("initial create: code=%d result=%#v", code, result)
 	}
 	task, err := service.Load(tasks, "PENDING")
 	if err != nil {
@@ -435,7 +503,7 @@ func TestCreateRepairsPendingOverlayWithoutRecreatingWorktree(t *testing.T) {
 	if err != nil || !exists {
 		t.Fatalf("load manifest: exists=%v err=%v", exists, err)
 	}
-	manifest.Worktrees[0].Overlay.Status = "pending"
+	manifest.Worktrees[0].SourceCopy.Status = "pending"
 	if err := ownership.Save(task.Task.Root, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -451,91 +519,72 @@ func TestCreateRepairsPendingOverlayWithoutRecreatingWorktree(t *testing.T) {
 		t.Fatalf("pending retry actions: %#v", items)
 	}
 	if _, err := os.Stat(filepath.Join(target, "two.env")); err != nil {
-		t.Fatalf("pending overlay was not repaired: %v", err)
+		t.Fatalf("pending source copy was not repaired: %v", err)
 	}
 	manifest, _, err = ownership.Load(task.Task.Root)
-	if err != nil || manifest.Worktrees[0].Overlay.Status != "complete" {
-		t.Fatalf("pending overlay status: %#v err=%v", manifest, err)
+	if err != nil || manifest.Worktrees[0].SourceCopy.Status != "complete" {
+		t.Fatalf("pending source-copy status: %#v err=%v", manifest, err)
 	}
 }
 
-func TestCreateRetainsPendingOverlayAfterPartialCopyFailure(t *testing.T) {
+func TestCreateRegistersMissingPendingTargetBeforeCopying(t *testing.T) {
 	repo := makeGitRepo(t)
-	first := filepath.Join(repo, "one.env")
-	second := filepath.Join(repo, "two.env")
-	if err := os.WriteFile(first, []byte("one"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("notes"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(second, []byte("two"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	runner := &mutateAfterWorktreeRunner{path: second}
-	service := Service{Runner: runner, Git: git.Client{Runner: runner}}
 	tasks := t.TempDir()
-	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "PARTIAL-OVERLAY", Repositories: []string{"app=" + repo}, Local: []string{"app=one.env", "app=two.env"}, Execute: true})
-	if code != report.ExitPartial || result.OK || !hasDiagnostic(result.Errors, "OVERLAY_SOURCE_CHANGED") {
-		t.Fatalf("partial overlay: code=%d result=%#v", code, result)
+	service := New()
+	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "MISSING", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+		t.Fatalf("initial create: code=%d result=%#v", code, result)
 	}
-	target := filepath.Join(tasks, "PARTIAL-OVERLAY", "worktrees", "app")
-	if contents, err := os.ReadFile(filepath.Join(target, "one.env")); err != nil || string(contents) != "one" {
-		t.Fatalf("first file after partial copy: %q err=%v", contents, err)
-	}
-	manifest, exists, err := ownership.Load(filepath.Join(tasks, "PARTIAL-OVERLAY"))
-	if err != nil || !exists || manifest.Worktrees[0].Overlay == nil || manifest.Worktrees[0].Overlay.Status != "pending" {
-		t.Fatalf("pending ownership after partial copy: manifest=%#v exists=%v err=%v", manifest, exists, err)
-	}
-	if err := os.WriteFile(second, []byte("two"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	service = New()
-	result, code = service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "PARTIAL-OVERLAY", Execute: true})
-	if code != report.ExitOK || !result.OK {
-		t.Fatalf("partial overlay retry: code=%d result=%#v", code, result)
-	}
-	items := result.Data.(map[string]any)["actions"].([]plan.Item)
-	if len(items) != 2 || items[0].Status != "reuse" || items[1].Status != "repaired" {
-		t.Fatalf("partial retry actions: %#v", items)
-	}
-}
-
-func TestCreateRejectsOverlayBaseCollisionBeforeMutation(t *testing.T) {
-	repo := makeGitRepo(t)
-	collision := filepath.Join(repo, "config", "local.env")
-	if err := os.MkdirAll(filepath.Dir(collision), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(collision, []byte("base"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if output, err := exec.Command("git", "-C", repo, "add", "config/local.env").CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v: %s", err, output)
-	}
-	if output, err := exec.Command("git", "-C", repo, "commit", "-m", "collision").CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v: %s", err, output)
-	}
-	collisionCommit, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	task, err := service.Load(tasks, "MISSING")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("git", "-C", repo, "reset", "--hard", "HEAD^").CombinedOutput(); err != nil {
-		t.Fatalf("git reset: %v: %s", err, output)
+	target := filepath.Join(task.Task.Root, task.Repositories[0].Worktree)
+	manifest, exists, err := ownership.Load(task.Task.Root)
+	if err != nil || !exists {
+		t.Fatalf("load manifest: exists=%v err=%v", exists, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(collision), 0755); err != nil {
+	manifest.Worktrees[0].SourceCopy.Status = "pending"
+	if err := ownership.Save(task.Task.Root, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("git", "-C", repo, "update-ref", "refs/remotes/origin/main", strings.TrimSpace(string(collisionCommit))).CombinedOutput(); err != nil {
-		t.Fatalf("update origin/main: %v: %s", err, output)
+	if output, err := exec.Command("git", "-C", repo, "worktree", "remove", "--force", target).CombinedOutput(); err != nil {
+		t.Fatalf("remove worktree: %v: %s", err, output)
 	}
-	if err := os.WriteFile(collision, []byte("local"), 0644); err != nil {
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target still present: %v", err)
+	}
+	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "MISSING", Execute: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("missing pending retry: code=%d result=%#v", code, result)
+	}
+	items := result.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(items) != 2 || items[0].Status != "created" || items[1].Status != "copied" {
+		t.Fatalf("missing pending actions: %#v", items)
+	}
+	if _, err := os.Stat(filepath.Join(target, "notes.txt")); err != nil {
+		t.Fatalf("re-registered target was not copied: %v", err)
+	}
+	manifest, _, err = ownership.Load(task.Task.Root)
+	if err != nil || manifest.Worktrees[0].SourceCopy.Status != "complete" {
+		t.Fatalf("source-copy status after re-registration: %#v err=%v", manifest, err)
+	}
+}
+
+func TestCreateRejectsSourceTargetOverlapBeforeMutation(t *testing.T) {
+	repo := makeGitRepo(t)
+	tasks := filepath.Join(repo, ".tasks")
+	if err := os.MkdirAll(tasks, 0755); err != nil {
 		t.Fatal(err)
 	}
-	tasks := t.TempDir()
-	result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "BASE-COLLISION", Repositories: []string{"app=" + repo}, Local: []string{"app=config/local.env"}, DryRun: true})
-	if code != report.ExitConflict || result.OK || !hasDiagnostic(result.Errors, "OVERLAY_BASE_CONFLICT") {
-		t.Fatalf("base collision: code=%d result=%#v", code, result)
+	result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "OVERLAP", Repositories: []string{"app=" + repo}, DryRun: true})
+	if code != report.ExitConflict || result.OK || !hasDiagnostic(result.Errors, "SOURCE_COPY_BOUNDARY") {
+		t.Fatalf("expected source/target boundary conflict: code=%d result=%#v", code, result)
 	}
-	if _, err := os.Stat(filepath.Join(tasks, "BASE-COLLISION")); !os.IsNotExist(err) {
-		t.Fatalf("base collision changed task root: %v", err)
+	if _, err := os.Stat(filepath.Join(tasks, "OVERLAP")); !os.IsNotExist(err) {
+		t.Fatalf("boundary conflict changed task root: %v", err)
 	}
 }
 
@@ -700,22 +749,6 @@ func hasDiagnostic(diagnostics []report.Diagnostic, code string) bool {
 
 type failSecondWorktreeRunner struct {
 	adds int
-}
-
-type mutateAfterWorktreeRunner struct {
-	path    string
-	mutated bool
-}
-
-func (r *mutateAfterWorktreeRunner) Run(ctx context.Context, spec execx.CommandSpec) (execx.Result, error) {
-	result, err := (execx.OSRunner{}).Run(ctx, spec)
-	if err == nil && !r.mutated && spec.Executable == "git" && containsArg(spec.Args, "worktree") && containsArg(spec.Args, "add") {
-		r.mutated = true
-		if writeErr := os.WriteFile(r.path, []byte("changed"), 0600); writeErr != nil {
-			return execx.Result{}, writeErr
-		}
-	}
-	return result, err
 }
 
 func (r *failSecondWorktreeRunner) Run(ctx context.Context, spec execx.CommandSpec) (execx.Result, error) {

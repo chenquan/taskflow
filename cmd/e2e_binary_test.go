@@ -10,16 +10,13 @@ import (
 	"testing"
 )
 
-func TestE2EBuiltBinaryPreservesOverlayActionData(t *testing.T) {
+func TestE2EBuiltBinaryReportsSourceCopyAction(t *testing.T) {
 	repo := e2eGitRepo(t)
-	localName := "local\nsettings.env"
-	displayName := "local\\nsettings.env"
+	localName := "local settings.env"
 	if runtime.GOOS == "windows" {
 		localName = "local settings.env"
-		displayName = localName
 	}
-	localPath := filepath.Join(repo, localName)
-	if err := os.WriteFile(localPath, []byte("PORT=4310\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, localName), []byte("PORT=4310\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	tasks := t.TempDir()
@@ -47,7 +44,7 @@ func TestE2EBuiltBinaryPreservesOverlayActionData(t *testing.T) {
 		}
 		return output
 	}
-	preview := run("--tasks-root", tasks, "--json", "create", "BINARY", "--repo", "app="+repo, "--local", "app="+localName, "--dry-run")
+	preview := run("--tasks-root", tasks, "--json", "create", "BINARY", "--repo", "app="+repo, "--dry-run")
 	var envelope struct {
 		OK   bool            `json:"ok"`
 		Data json.RawMessage `json:"data"`
@@ -59,33 +56,49 @@ func TestE2EBuiltBinaryPreservesOverlayActionData(t *testing.T) {
 		Actions []struct {
 			Kind      string `json:"kind"`
 			Status    string `json:"status"`
+			Source    string `json:"source"`
+			Target    string `json:"target"`
 			FileCount int    `json:"fileCount"`
-			Files     []struct {
-				Path string `json:"path"`
-			} `json:"files"`
 		} `json:"actions"`
 	}
 	if err := json.Unmarshal(envelope.Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if len(data.Actions) != 2 || data.Actions[0].Kind != "worktree" || data.Actions[0].Status != "create" || data.Actions[1].Kind != "overlay" || data.Actions[1].Status != "copy" || data.Actions[1].FileCount != 1 || len(data.Actions[1].Files) != 1 || data.Actions[1].Files[0].Path != localName {
-		t.Fatalf("binary overlay preview: %#v", data.Actions)
+	if len(data.Actions) != 2 || data.Actions[0].Kind != "worktree" || data.Actions[0].Status != "create" || data.Actions[1].Kind != "source-copy" || data.Actions[1].Status != "copy" {
+		t.Fatalf("binary source-copy preview: %#v", data.Actions)
 	}
-	textPreview := run("--tasks-root", tasks, "create", "BINARY", "--repo", "app="+repo, "--local", "app="+localName, "--dry-run")
-	if !strings.Contains(string(textPreview), "COPY local overlay") || !strings.Contains(string(textPreview), displayName) {
-		t.Fatalf("binary text overlay preview: %s", textPreview)
+	if data.Actions[1].Source == "" || filepath.Base(data.Actions[1].Source) != "repo" || !strings.HasSuffix(data.Actions[1].Target, filepath.Join("BINARY", "worktrees", "app")) {
+		t.Fatalf("source-copy action paths: %#v", data.Actions[1])
 	}
-	invalid := exec.Command(binary, "--tasks-root", tasks, "--json", "create", "INVALID", "--repo", "app="+repo, "--local", "app=../outside", "--dry-run")
-	invalidOutput, invalidErr := invalid.CombinedOutput()
-	if invalidErr == nil || invalid.ProcessState.ExitCode() != 2 || !strings.Contains(string(invalidOutput), "INVALID_CONFIGURATION") {
-		t.Fatalf("binary invalid overlay: err=%v exit=%d output=%s", invalidErr, invalid.ProcessState.ExitCode(), invalidOutput)
+	textPreview := run("--tasks-root", tasks, "create", "BINARY", "--repo", "app="+repo, "--dry-run")
+	if !strings.Contains(string(textPreview), "COPY source") || !strings.Contains(string(textPreview), repo) {
+		t.Fatalf("binary text source-copy preview: %s", textPreview)
 	}
-	run("--tasks-root", tasks, "--json", "create", "BINARY", "--repo", "app="+repo, "--local", "app="+localName, "--execute")
-	if _, err := os.Stat(filepath.Join(tasks, "BINARY", "worktrees", "app", localName)); err != nil {
-		t.Fatalf("binary overlay file missing: %v", err)
+	run("--tasks-root", tasks, "--json", "create", "BINARY", "--repo", "app="+repo, "--execute")
+	copied, err := os.ReadFile(filepath.Join(tasks, "BINARY", "worktrees", "app", localName))
+	if err != nil || string(copied) != "PORT=4310\n" {
+		t.Fatalf("binary source copy is incomplete: %q err=%v", copied, err)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "BINARY", "worktrees", "app", ".git")); err != nil {
+		t.Fatalf("binary worktree lost its git metadata: %v", err)
 	}
 	repeat := run("--tasks-root", tasks, "--json", "create", "BINARY", "--dry-run")
-	if !strings.Contains(string(repeat), `"status": "reuse"`) || !strings.Contains(string(repeat), `"kind": "overlay"`) {
-		t.Fatalf("binary repeat did not report reuse overlay: %s", repeat)
+	if !strings.Contains(string(repeat), `"status": "reuse"`) || !strings.Contains(string(repeat), `"kind": "source-copy"`) {
+		t.Fatalf("binary repeat did not report source-copy reuse: %s", repeat)
+	}
+	executeItems := run("--tasks-root", tasks, "--json", "create", "BINARY", "--execute")
+	var executeEnvelope struct {
+		Data struct {
+			Actions []struct {
+				Kind   string `json:"kind"`
+				Status string `json:"status"`
+			} `json:"actions"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(executeItems, &executeEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(executeEnvelope.Data.Actions) != 2 || executeEnvelope.Data.Actions[0].Status != "reuse" || executeEnvelope.Data.Actions[1].Status != "reuse" {
+		t.Fatalf("binary repeat execute actions: %#v", executeEnvelope.Data.Actions)
 	}
 }

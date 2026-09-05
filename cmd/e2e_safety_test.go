@@ -89,7 +89,7 @@ func TestE2ECreateJSONAndReuseDirtyWorktree(t *testing.T) {
 	if err := json.Unmarshal(reuse.Data, &reuseData); err != nil {
 		t.Fatalf("reuse data: %v", err)
 	}
-	if len(reuseData.Actions) != 4 || reuseData.Actions[0].Repo != "one" || reuseData.Actions[0].Kind != "worktree" || reuseData.Actions[0].Status != "reuse" || reuseData.Actions[1].Kind != "overlay" || reuseData.Actions[1].Status != "skipped" || reuseData.Actions[2].Repo != "two" || reuseData.Actions[2].Kind != "worktree" || reuseData.Actions[2].Status != "reuse" || reuseData.Actions[3].Kind != "overlay" || reuseData.Actions[3].Status != "skipped" {
+	if len(reuseData.Actions) != 4 || reuseData.Actions[0].Repo != "one" || reuseData.Actions[0].Kind != "worktree" || reuseData.Actions[0].Status != "reuse" || reuseData.Actions[1].Kind != "source-copy" || reuseData.Actions[1].Status != "reuse" || reuseData.Actions[2].Repo != "two" || reuseData.Actions[2].Kind != "worktree" || reuseData.Actions[2].Status != "reuse" || reuseData.Actions[3].Kind != "source-copy" || reuseData.Actions[3].Status != "reuse" {
 		t.Fatalf("reuse actions: %#v", reuseData.Actions)
 	}
 	if _, err := runE2E(t, tasks, "--json", "create", "FLOW", "--execute"); err != nil {
@@ -269,32 +269,27 @@ func TestE2EDeleteRefusesUnownedAndDirtyWorktrees(t *testing.T) {
 	}
 }
 
-func TestE2EDeleteTreatsCopiedOverlayAsDirty(t *testing.T) {
+func TestE2EDeleteTreatsCopiedSnapshotAsDirty(t *testing.T) {
 	repo := e2eGitRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("local.env\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"-C", repo, "add", ".gitignore"}, {"-C", repo, "commit", "-m", "ignore overlay"}, {"-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"}} {
-		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, output)
-		}
-	}
 	if err := os.WriteFile(filepath.Join(repo, "local.env"), []byte("local"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	tasks := t.TempDir()
-	if output, err := runE2E(t, tasks, "create", "OVERLAY-DELETE", "--repo", "repo="+repo, "--local", "repo=local.env", "--execute"); err != nil {
-		t.Fatalf("overlay create: %v: %s", err, output)
+	if output, err := runE2E(t, tasks, "create", "SNAPSHOT-DELETE", "--repo", "repo="+repo, "--execute"); err != nil {
+		t.Fatalf("snapshot create: %v: %s", err, output)
 	}
-	target := filepath.Join(tasks, "OVERLAY-DELETE", "worktrees", "repo")
-	if output, err := runE2E(t, tasks, "--json", "delete", "OVERLAY-DELETE", "--execute"); err == nil || !strings.Contains(output, "WORKTREE_DIRTY") {
-		t.Fatalf("expected overlay dirty refusal: %v: %s", err, output)
+	target := filepath.Join(tasks, "SNAPSHOT-DELETE", "worktrees", "repo")
+	if _, err := os.Stat(filepath.Join(target, "local.env")); err != nil {
+		t.Fatalf("copied snapshot is incomplete: %v", err)
+	}
+	if output, err := runE2E(t, tasks, "--json", "delete", "SNAPSHOT-DELETE", "--execute"); err == nil || !strings.Contains(output, "WORKTREE_DIRTY") {
+		t.Fatalf("expected copied-snapshot dirty refusal: %v: %s", err, output)
 	}
 	if _, err := os.Stat(filepath.Join(target, "local.env")); err != nil {
-		t.Fatalf("overlay file was removed by refused delete: %v", err)
+		t.Fatalf("snapshot file was removed by refused delete: %v", err)
 	}
-	if output, err := runE2E(t, tasks, "delete", "OVERLAY-DELETE", "--execute", "--force"); err != nil {
-		t.Fatalf("forced overlay delete: %v: %s", err, output)
+	if output, err := runE2E(t, tasks, "delete", "SNAPSHOT-DELETE", "--execute", "--force"); err != nil {
+		t.Fatalf("forced delete: %v: %s", err, output)
 	}
 }
 

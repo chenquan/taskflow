@@ -12,8 +12,8 @@ type Item struct {
 	Kind        string               `json:"kind"`
 	Description string               `json:"description"`
 	Status      string               `json:"status,omitempty"`
+	Source      string               `json:"source,omitempty"`
 	Target      string               `json:"target,omitempty"`
-	Files       []domain.OverlayFile `json:"files,omitempty"`
 	FileCount   int                  `json:"fileCount,omitempty"`
 	TotalBytes  int64                `json:"totalBytes,omitempty"`
 	Reason      string               `json:"reason,omitempty"`
@@ -33,11 +33,12 @@ func Build(task domain.Task) ([]Item, error) {
 			Description: fmt.Sprintf("RECONCILE %s -> %s", repository.Name, repository.Worktree),
 		})
 		items = append(items, Item{
-			ID:          "overlay-" + repository.Name,
+			ID:          "source-copy-" + repository.Name,
 			Repo:        repository.Name,
-			Kind:        "overlay",
+			Kind:        "source-copy",
+			Source:      repository.Source,
 			Target:      repository.Worktree,
-			Description: fmt.Sprintf("RECONCILE local overlay %s -> %s", repository.Name, repository.Worktree),
+			Description: fmt.Sprintf("COPY source %s -> %s", repository.Source, repository.Worktree),
 		})
 	}
 	return items, nil
