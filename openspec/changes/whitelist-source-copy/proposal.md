@@ -4,10 +4,10 @@
 
 ## What Changes
 
-- **BREAKING** 用白名单机制替换新 worktree 的完整 source 工作目录复制：只有 source 仓库根 `.taskflowcopy` 清单中声明的路径会被复制进新 worktree。
-- 新增 `.taskflowcopy` 清单契约：gitignore 风格 glob（`*`、`?`、`[...]`、`**`），`#` 注释，尾部 `/` 标记目录，不含 `/` 的模式按 basename 匹配任意层级；不支持 `!` 取反。
+- **BREAKING** 用白名单机制替换新 worktree 的完整 source 工作目录复制：只有 source 仓库根 `.taskflowinclude` 清单中声明的路径会被复制进新 worktree。
+- 新增 `.taskflowinclude` 清单契约：gitignore 风格 glob（`*`、`?`、`[...]`、`**`），`#` 注释，尾部 `/` 标记目录，不含 `/` 的模式按 basename 匹配任意层级；不支持 `!` 取反。
 - 新 worktree 恢复正常 base checkout，再把白名单匹配的路径从 source 叠加复制进去；移除 `--no-checkout` 注册与 index 重建步骤。
-- 清单缺失时创建失败（dry-run 同样失败），返回要求创建 `.taskflowcopy` 的结构化诊断；仅含注释的清单表示不复制任何内容。
+- 清单缺失时创建失败（dry-run 同样失败），返回要求创建 `.taskflowinclude` 的结构化诊断；仅含注释的清单表示不复制任何内容。
 - 叠加是加法式的：匹配的 tracked 修改以未暂存修改落地，untracked/ignored 按原状态落地；source 中已删除的 tracked 文件不携带删除，未列出的 tracked 文件保持 base 内容。
 - 保留 ownership manifest 的 pending/complete 复制状态、repair 重试语义和删除安全门禁。
 - execute 对匹配不到任何 source 路径的字面量模式发出 warning，缓解白名单静默漏复制。
@@ -19,18 +19,18 @@
 
 ### New Capabilities
 
-- `whitelist-source-copy`: `.taskflowcopy` 白名单清单的位置、语法与匹配语义，以及按清单叠加复制的边界与安全规则。
+- `whitelist-source-copy`: `.taskflowinclude` 白名单清单的位置、语法与匹配语义，以及按清单叠加复制的边界与安全规则。
 
 ### Modified Capabilities
 
 - `worktree-start`: 创建流程改为正常 checkout + 白名单叠加复制；dry-run 增加 source-copy 动作（含模式数）。
 - `worktree-reconciliation`: 复制完整性由 ownership manifest 的复制状态派生，收窄原"一切判定只依赖 live Git facts"的不变量；复制动作区分 copy/repair/reuse。
 - `task-workspace-initialization`: 新任务 worktree 携带清单声明的本地内容。
-- `environment-preflight`: 增加 `.taskflowcopy` 存在性与语法校验及 source/target 边界检查。
+- `environment-preflight`: 增加 `.taskflowinclude` 存在性与语法校验及 source/target 边界检查。
 - `cli-output-contract`: create 动作事实包含 source-copy 动作与白名单模式数。
 - `resumable-action-execution`: 中断重试按 pending 状态重新叠加白名单复制。
 - `e2e-command-flow`: 覆盖白名单复制、清单缺失失败、`.git` 排除与 unmatched 警告。
-- `taskflow-multirepo-skill`: skill 引导创建与审查 `.taskflowcopy`。
+- `taskflow-multirepo-skill`: skill 引导创建与审查 `.taskflowinclude`。
 
 ## Impact
 

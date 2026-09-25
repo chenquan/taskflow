@@ -31,7 +31,7 @@ func e2eGitRepo(t *testing.T) string {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".taskflowcopy"), []byte("# no local content to carry\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".taskflowinclude"), []byte("# no local content to carry\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -274,7 +274,7 @@ func TestE2EDeleteRefusesUnownedAndDirtyWorktrees(t *testing.T) {
 
 func TestE2EDeleteTreatsCopiedSnapshotAsDirty(t *testing.T) {
 	repo := e2eGitRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("local.env\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowinclude"), []byte("local.env\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "local.env"), []byte("local"), 0600); err != nil {
@@ -344,7 +344,7 @@ func TestE2EWhitelistDrivesSourceCopy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "secrets.env"), []byte("S=1"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("settings.env\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowinclude"), []byte("settings.env\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	tasks := t.TempDir()
@@ -362,7 +362,7 @@ func TestE2EWhitelistDrivesSourceCopy(t *testing.T) {
 
 func TestE2EMissingManifestFailsWithoutMutation(t *testing.T) {
 	repo := e2eGitRepo(t)
-	if err := os.Remove(filepath.Join(repo, ".taskflowcopy")); err != nil {
+	if err := os.Remove(filepath.Join(repo, ".taskflowinclude")); err != nil {
 		t.Fatal(err)
 	}
 	tasks := t.TempDir()

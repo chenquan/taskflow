@@ -10,7 +10,7 @@ import (
 // ManifestName is the whitelist file, at the source repository root, that
 // declares which working-directory paths are copied into newly created
 // Taskflow worktrees.
-const ManifestName = ".taskflowcopy"
+const ManifestName = ".taskflowinclude"
 
 // ManifestError distinguishes a missing whitelist from an invalid one so
 // create can report a precise preflight diagnostic.

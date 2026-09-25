@@ -1,14 +1,14 @@
 ## MODIFIED Requirements
 
 ### Requirement: Initialize a task workspace from explicit local repositories
-The CLI SHALL provide `taskflow create <task-id>` with one or more unique `--repo <name>=<path>` values only for a new task without taskflow.yaml. Repository order MUST be preserved and the first repository MUST be the primary launch worktree. Execute mode MUST persist taskflow.yaml and an ownership manifest for worktrees it creates, MUST create each new worktree with a normal base checkout, and MUST carry each source repository's `.taskflowcopy`-declared local content into its new worktree; it MUST NOT create state, inventory, validation reports, branches, commits, or worktrees until the create preflight succeeds. Existing task configuration MUST be edited directly and reconciled through create without repository arguments.
+The CLI SHALL provide `taskflow create <task-id>` with one or more unique `--repo <name>=<path>` values only for a new task without taskflow.yaml. Repository order MUST be preserved and the first repository MUST be the primary launch worktree. Execute mode MUST persist taskflow.yaml and an ownership manifest for worktrees it creates, MUST create each new worktree with a normal base checkout, and MUST carry each source repository's `.taskflowinclude`-declared local content into its new worktree; it MUST NOT create state, inventory, validation reports, branches, commits, or worktrees until the create preflight succeeds. Existing task configuration MUST be edited directly and reconciled through create without repository arguments.
 
 #### Scenario: Create three valid repositories
 - **WHEN** a user creates a new task with three existing local Git repositories in a supplied order
 - **THEN** dry-run reports the configuration and planned worktrees without mutation, and execute writes taskflow.yaml and creates the worktrees in that order
 
 #### Scenario: New worktrees carry declared local content
-- **WHEN** a source repository declares local files in `.taskflowcopy` and its worktree is created
+- **WHEN** a source repository declares local files in `.taskflowinclude` and its worktree is created
 - **THEN** the new worktree contains exactly the declared source paths in addition to the base checkout
 
 #### Scenario: Reject a non-Git repository

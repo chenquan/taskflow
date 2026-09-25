@@ -8,7 +8,7 @@ Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、�
 
 - 一个任务按稳定顺序关联多个本地 Git 仓库
 - 使用 Git worktree 隔离任务开发环境
-- 按 source 仓库的 `.taskflowcopy` 白名单，把声明的本地内容（未提交修改、untracked 和 ignored 文件）复制进新 worktree
+- 按 source 仓库的 `.taskflowinclude` 白名单，把声明的本地内容（未提交修改、untracked 和 ignored 文件）复制进新 worktree
 - dry-run、全量 preflight、任务锁和 source/branch 锁
 - 基于实时 Git 事实和 source-copy 状态的幂等创建与中断后重试
 - bundled skill 根据 taskflow.yaml 生成原生 Codex/Claude 命令，将所有仓库关联到工作区
@@ -59,7 +59,7 @@ taskflow skill install --project --tool claude
 
 ## 快速开始
 
-`--tasks-root` 默认是当前目录。仓库声明顺序必须稳定：第一个仓库是生成的 AI CLI 命令的工作目录，后续仓库作为 additional directories。开始前，在每个 source 仓库根目录准备 `.taskflowcopy` 白名单（语法见下文），声明要带进新 worktree 的本地内容。
+`--tasks-root` 默认是当前目录。仓库声明顺序必须稳定：第一个仓库是生成的 AI CLI 命令的工作目录，后续仓库作为 additional directories。开始前，在每个 source 仓库根目录准备 `.taskflowinclude` 白名单（语法见下文），声明要带进新 worktree 的本地内容。
 
 先预览，确认后执行：
 
@@ -86,14 +86,14 @@ taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks delete REFUND-123 --execute
 ```
 
-`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、ownership、worktree、分支或锁目录，也不枚举或读取将要复制的内容；它校验每个仓库的 `.taskflowcopy` 并列出 worktree action 和 source-copy action（含清单模式数）。新任务的 execute 会在完整 preflight 后写入初始配置、记录 pending source-copy 状态，再用正常 `git worktree add` 创建缺失的 worktree（完整 base 检出），最后把清单声明的路径从 source 叠加复制进目标。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
+`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、ownership、worktree、分支或锁目录，也不枚举或读取将要复制的内容；它校验每个仓库的 `.taskflowinclude` 并列出 worktree action 和 source-copy action（含清单模式数）。新任务的 execute 会在完整 preflight 后写入初始配置、记录 pending source-copy 状态，再用正常 `git worktree add` 创建缺失的 worktree（完整 base 检出），最后把清单声明的路径从 source 叠加复制进目标。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
 
-## 白名单清单 `.taskflowcopy`
+## 白名单清单 `.taskflowinclude`
 
-新 worktree 携带哪些本地内容由每个 source 仓库根目录的 `.taskflowcopy` 决定。清单缺失时 create（dry-run 和 execute）都会以 `SOURCE_COPY_MANIFEST_MISSING` 失败；仅含注释的清单表示不复制任何内容，新 worktree 就是干净的 base 检出。
+新 worktree 携带哪些本地内容由每个 source 仓库根目录的 `.taskflowinclude` 决定。清单缺失时 create（dry-run 和 execute）都会以 `SOURCE_COPY_MANIFEST_MISSING` 失败；仅含注释的清单表示不复制任何内容，新 worktree 就是干净的 base 检出。
 
 ```text
-# .taskflowcopy —— gitignore 风格，每行一个模式
+# .taskflowinclude —— gitignore 风格，每行一个模式
 config/local.yaml        # 字面量路径
 env/                     # 尾部 / 表示目录，整棵子树复制（不含 .git）
 *.log                    # 不含 / 的模式按 basename 匹配任意层级
@@ -177,7 +177,7 @@ repositories:
 ```
 
 `source` 使用绝对路径，`base` 必须在本地可解析，`worktree` 必须位于任务的 `worktrees/` 目录内。Taskflow 不隐式 fetch；请在 source 仓库准备好 base 后再重试 create。
-创建新 worktree 时只有 `.taskflowcopy` 声明的路径会进入目标；dry-run 和 execute 输出都会显示复制 action、清单模式数，execute 还会显示条目与字节统计。
+创建新 worktree 时只有 `.taskflowinclude` 声明的路径会进入目标；dry-run 和 execute 输出都会显示复制 action、清单模式数，execute 还会显示条目与字节统计。
 
 首次通过 `--repo` 声明仓库时，Taskflow 默认读取该 source 的 `origin/HEAD`，并将其解析到本地可用的远程默认分支作为 base；同时生成 `feature/<task-id>` 分支，但只使用该远程分支的提交作为起点，不建立 upstream 关联。例如 `origin/HEAD` 指向 `origin/main` 时，配置中的 base 是 `origin/main`，但生成的 worktree 分支不会默认关联 `origin/main`；`origin/master` 等其他远程默认分支同理。`origin/HEAD` 缺失或对应引用不可用时，create 会在写入初始配置或创建 worktree 前失败。已存在配置中的显式 `base` 和 `branch` 保持不变；已有配置的后续修改由用户或 AI 直接编辑 YAML。
 
@@ -187,7 +187,7 @@ execute-mode create 会：
 
 1. 获取任务锁；
 2. 按 canonical Git common directory 和 branch 获取 source lock；
-3. 检查所有 source、base、branch 占用、target、worktree identity、source/target 复制边界和 `.taskflowcopy` 清单；
+3. 检查所有 source、base、branch 占用、target、worktree identity、source/target 复制边界和 `.taskflowinclude` 清单；
 4. 对新任务通过 atomic write 写入初始 taskflow.yaml 和 pending source-copy 状态；已有任务不重写用户配置；
 5. 只创建缺失的 worktree（正常 base 检出），然后按白名单叠加复制并在成功后标记 complete。
 

@@ -38,7 +38,7 @@ func writeCopyManifest(t *testing.T, repo string, lines ...string) {
 	for _, line := range lines {
 		raw += line + "\n"
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte(raw), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowinclude"), []byte(raw), 0644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -795,7 +795,7 @@ func TestCreateFailsLoudlyWithoutManifest(t *testing.T) {
 
 func TestCreateRejectsInvalidManifest(t *testing.T) {
 	repo := makeGitRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("!keep.txt\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowinclude"), []byte("!keep.txt\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	preview, code := New().Create(context.Background(), CreateOptions{TasksRoot: t.TempDir(), TaskID: "BADMANIFEST", Repositories: []string{"app=" + repo}, DryRun: true})

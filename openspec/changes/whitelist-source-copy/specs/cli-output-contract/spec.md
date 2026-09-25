@@ -9,10 +9,10 @@ Commands supporting `--json` MUST emit valid JSON with `schemaVersion`, `command
 
 #### Scenario: Render create action facts as JSON
 - **WHEN** create runs in dry-run or execute mode
-- **THEN** its data identifies the resolved configuration and, for each repository, the worktree action, the source-copy action with its `.taskflowcopy` pattern count, and after execute the copied entry and byte totals
+- **THEN** its data identifies the resolved configuration and, for each repository, the worktree action, the source-copy action with its `.taskflowinclude` pattern count, and after execute the copied entry and byte totals
 
 #### Scenario: Render an unmatched-pattern warning
-- **WHEN** execute reports a literal `.taskflowcopy` pattern that matched no source path
+- **WHEN** execute reports a literal `.taskflowinclude` pattern that matched no source path
 - **THEN** the warning appears in both text and JSON renderings with the pattern and repository name
 
 #### Scenario: Render delete action facts as JSON

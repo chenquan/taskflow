@@ -23,7 +23,7 @@ func TestE2EBuiltBinaryRetriesFailedSourceCopy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "z-last.env"), []byte("last"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("a-first.env\nm-pipe\nz-last.env\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowinclude"), []byte("a-first.env\nm-pipe\nz-last.env\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	tasks := t.TempDir()
