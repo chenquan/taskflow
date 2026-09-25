@@ -99,6 +99,14 @@ func (c Client) HasRef(ctx context.Context, path, ref string) bool {
 	return err == nil
 }
 
+func gitCommandError(prefix string, result execx.Result) error {
+	message := strings.TrimSpace(result.Stderr)
+	if message == "" {
+		return fmt.Errorf("%s", prefix)
+	}
+	return fmt.Errorf("%s: %s", prefix, message)
+}
+
 // DefaultBase resolves the source repository's remote default branch without
 // fetching or changing Git state.
 func (c Client) DefaultBase(ctx context.Context, path string) (string, error) {
@@ -153,6 +161,10 @@ func (c Client) Worktrees(ctx context.Context, path string) ([]Worktree, error) 
 	flush()
 	return result, nil
 }
+
+// AddWorktree registers a worktree from the configured base with a normal
+// checkout, so unlisted tracked files exist at base content and the whitelist
+// overlay only has to overwrite the declared paths.
 func (c Client) AddWorktree(ctx context.Context, source, branch, target, base string, trackBase bool) error {
 	args := []string{"-C", source, "worktree", "add"}
 	if c.HasRef(ctx, source, "refs/heads/"+branch) {

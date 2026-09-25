@@ -14,6 +14,12 @@ func TestTaskflowSkillGuidesCreateNativeToolsAndDelete(t *testing.T) {
 	for _, required := range []string{
 		"create <task-id>",
 		"create <task-id> --execute",
+		"source-copy action",
+		".worktreeinclude",
+		"白名单",
+		"ignored 文件",
+		".git",
+		"pending",
 		"delete <task-id>",
 		"ownership.json",
 		"OWNERSHIP_NOT_FOUND",
@@ -22,6 +28,11 @@ func TestTaskflowSkillGuidesCreateNativeToolsAndDelete(t *testing.T) {
 		"SOURCE_BRANCH_LOCKED",
 		"WORKTREE_MISMATCH",
 		"CREATE_WORKTREE_FAILED",
+		"SOURCE_COPY_BOUNDARY",
+		"SOURCE_COPY_UNSUPPORTED_ENTRY",
+		"SOURCE_COPY_MANIFEST_MISSING",
+		"SOURCE_COPY_MANIFEST_INVALID",
+		"SOURCE_COPY_PATTERN_UNMATCHED",
 		"CONFIG_EDIT_REQUIRED",
 		"直接编辑 taskflow.yaml",
 		"create --dry-run",
@@ -59,6 +70,13 @@ func TestTaskflowSkillGuidesCreateNativeToolsAndDelete(t *testing.T) {
 		"open <task-id>",
 		"TOOL_NOT_FOUND",
 		"TOOL_EXITED",
+		"--local",
+		"local.paths",
+		"overlay",
+		"OVERLAY_",
+		"--no-checkout",
+		"完整工作目录",
+		"SOURCE_INDEX_RESET_FAILED",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("skill contains retired guidance %q", forbidden)
