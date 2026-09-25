@@ -1,0 +1,30 @@
+version: 1
+
+task:
+  id: DEMO-001
+
+limits:
+  max_iterations: 20
+  max_duration: 4h
+
+stages:
+  - id: implement
+    objective: 实现需求、补充测试，并记录本轮修改摘要
+    max_attempts: 3
+    checks: [tests]
+
+  - id: review
+    objective: 检查兼容性、边界条件和测试覆盖率
+    max_attempts: 2
+    checks: [tests]
+
+checks:
+  - id: tests
+    argv: ["go", "test", "./..."]
+    cwd: "repo:service"
+    timeout: 10m
+    output_limit: 65536
+    env_allowlist: [PATH, HOME, TMPDIR, GOCACHE, GOMODCACHE, GOPATH]
+
+policy:
+  external_actions: deny
