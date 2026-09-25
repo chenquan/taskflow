@@ -3,7 +3,7 @@
 Coordinate mutating creates that use the same local Git source branch across task roots.
 ## Requirements
 ### Requirement: Coordinate execute-mode source branches across tasks
-Before execute-mode create mutates taskflow.yaml or creates a worktree, the CLI MUST acquire a local exclusive lock for every configured `(canonical Git common directory, branch)` pair. Locks MUST be stored beneath that common directory, acquired in deterministic sorted order, and released after create returns. A held lock MUST return exit code 5 with a structured `SOURCE_BRANCH_LOCKED` diagnostic; a lock-storage failure MUST return an environment failure. Read-only dry-run and open commands, and creates for different branches, MUST NOT contend.
+Before execute-mode create mutates taskflow.yaml or creates a worktree, the CLI MUST acquire a local exclusive lock for every configured `(canonical Git common directory, branch)` pair. Locks MUST be stored beneath that common directory, acquired in deterministic sorted order, and released after create returns. A held lock MUST return exit code 5 with a structured `SOURCE_BRANCH_LOCKED` diagnostic; a lock-storage failure MUST return an environment failure. Read-only dry-run commands and creates for different branches MUST NOT contend.
 
 #### Scenario: Competing tasks use the same source branch
 - **WHEN** one task holds an execute-mode lock for a source repository branch

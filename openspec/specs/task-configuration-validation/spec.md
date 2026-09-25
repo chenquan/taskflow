@@ -11,7 +11,7 @@ The CLI MUST decode taskflow.yaml with unknown fields rejected, apply the curren
 
 #### Scenario: Preserve repository order
 - **WHEN** taskflow.yaml lists repositories in a specific order
-- **THEN** loading preserves that order and open uses the first repository as cwd
+- **THEN** loading preserves that order and the first repository remains the primary working directory for skill-composed tool commands
 
 ### Requirement: Validate repository and dependency constraints
 The CLI MUST require unique repository names matching the supported name pattern, existing source directories, non-empty base and branch values, worktree paths contained beneath the task worktrees directory, and unique target paths. Loading and structural validation MUST NOT launch external commands.
@@ -22,4 +22,4 @@ The CLI MUST require unique repository names matching the supported name pattern
 
 #### Scenario: Reject duplicate targets
 - **WHEN** two repositories resolve to the same worktree target
-- **THEN** configuration validation returns a conflict before create or open
+- **THEN** configuration validation returns a conflict before create or delete

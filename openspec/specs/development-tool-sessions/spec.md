@@ -2,32 +2,25 @@
 
 Define safe configured Codex and Claude launches from managed primary worktrees with controlled additional directories.
 ## Requirements
-### Requirement: Build safe Codex and Claude launch specifications
-The CLI SHALL support `open <task-id> [--tool codex|claude] [-- <tool-args>...]`, default to Codex when the tool is omitted, resolve the selected built-in executable from `PATH`, use the first repository worktree as cwd, and add every later repository worktree and the task root as additional directories. Extra tool arguments, including permission-bypass flags, MUST be forwarded unchanged, except `--worktree` and `--worktree=...` MUST be rejected before launch. Claude MUST receive `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`. Unsupported tools and missing executables MUST fail before launch.
+### Requirement: Compose native tool commands from skill guidance
+The skill SHALL instruct an agent to compose ready-to-run native `claude` and `codex` command lines from taskflow.yaml for the user to execute, instead of launching tools through the CLI. The composed command MUST use the first repository worktree as the working directory, pass absolute additional-directory paths for every later repository worktree and the task root via `--add-dir`, and prefix Claude invocations with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`. The agent MUST identify the user's shell and quote or escape every path using syntax valid for POSIX shells, PowerShell, or cmd.exe; it MUST present the command to the user rather than execute it, and MUST warn against `--worktree` and `--worktree=...` arguments.
 
-#### Scenario: Build Codex launch
-- **WHEN** the user opens Codex for a ready task with multiple repositories
-- **THEN** the process uses `codex` from `PATH`, the first repository worktree as cwd, and repeated `--add-dir` arguments for remaining worktrees and task root
+#### Scenario: Compose a Claude command
+- **WHEN** every configured worktree reports `reuse` and the user requests Claude
+- **THEN** the agent presents a command that changes into the first repository worktree, sets `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`, invokes `claude`, and passes `--add-dir` with absolute paths for every later worktree and the task root
 
-#### Scenario: Enable Claude additional instructions
-- **WHEN** the user opens Claude for a ready task
-- **THEN** the launched child uses `claude` from `PATH` and receives `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`
+#### Scenario: Compose a Codex command
+- **WHEN** every configured worktree reports `reuse` and the user requests Codex
+- **THEN** the agent presents a `codex` command with the same working directory and the same absolute `--add-dir` arguments
 
-#### Scenario: Forward safe tool arguments
-- **WHEN** the user provides arguments after `--` that do not request a nested worktree
-- **THEN** the selected tool receives those arguments unchanged after Taskflow's additional-directory arguments
+#### Scenario: Gate composition on structural readiness
+- **WHEN** the readiness `create --dry-run` without `--repo` reports any repository as `create` or a conflict
+- **THEN** the agent surfaces the reported issue instead of composing a tool command
 
-#### Scenario: Reject nested worktree arguments
-- **WHEN** forwarded arguments contain `--worktree` or a `--worktree=...` value
-- **THEN** open returns an invalid-argument diagnostic without launching the child
+#### Scenario: Warn against nested worktree flags
+- **WHEN** the user requests `--worktree` or `--worktree=...` in the composed invocation
+- **THEN** the agent omits or refuses the flag and explains the nested-worktree risk
 
-### Requirement: Launch only from a structurally ready workspace
-Before launching a tool, open MUST verify every configured worktree exists, belongs to the configured source repository, and uses the expected branch. It MUST NOT require a state file, phase, digest, or prior Taskflow action outcome. Dirty matching worktrees MUST remain launchable.
-
-#### Scenario: Reject a missing or mismatched worktree
-- **WHEN** a configured worktree is missing, belongs to another source, or uses an unexpected branch
-- **THEN** open returns a worktree diagnostic without launching a tool
-
-#### Scenario: Open a dirty ready workspace
-- **WHEN** every configured worktree is valid and at least one contains uncommitted changes
-- **THEN** open launches the selected tool with all configured directories
+#### Scenario: Render shell-safe paths
+- **WHEN** a task root or worktree path contains spaces or shell metacharacters
+- **THEN** the agent renders a shell-appropriate quoted and escaped command for the user's POSIX shell, PowerShell, or cmd.exe instead of inserting the raw path

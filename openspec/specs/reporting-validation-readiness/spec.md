@@ -1,9 +1,9 @@
 ## Purpose
 
-Define current operational results for create, open, and delete without validation history or readiness conclusions.
+Define current operational results for create and delete without validation history or readiness conclusions.
 ## Requirements
-### Requirement: Report create, open, and delete operational results
-Create, open, and delete SHALL expose their current action, conflict, launch, and cleanup results through the common text and JSON output contract without validation or readiness history.
+### Requirement: Report create and delete operational results
+Create and delete SHALL expose their current action, conflict, and cleanup results through the common text and JSON output contract without validation or readiness history.
 
 #### Scenario: Report a create action
 - **WHEN** create previews or executes a repository reconciliation
