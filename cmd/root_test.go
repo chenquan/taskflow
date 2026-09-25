@@ -39,6 +39,9 @@ func TestTasksRootDefaultsToCurrentDirectory(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("# no local content to carry\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	root := NewRootCommand()
 	root.SetOut(os.Stdout)

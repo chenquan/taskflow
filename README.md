@@ -8,7 +8,7 @@ Taskflow 不管理需求、任务进度、AI session、提交、推送、PR、�
 
 - 一个任务按稳定顺序关联多个本地 Git 仓库
 - 使用 Git worktree 隔离任务开发环境
-- 创建新 worktree 时复制 source 的完整工作目录（包括未提交修改、untracked 和 ignored 文件）
+- 按 source 仓库的 `.taskflowcopy` 白名单，把声明的本地内容（未提交修改、untracked 和 ignored 文件）复制进新 worktree
 - dry-run、全量 preflight、任务锁和 source/branch 锁
 - 基于实时 Git 事实和 source-copy 状态的幂等创建与中断后重试
 - bundled skill 根据 taskflow.yaml 生成原生 Codex/Claude 命令，将所有仓库关联到工作区
@@ -59,7 +59,7 @@ taskflow skill install --project --tool claude
 
 ## 快速开始
 
-`--tasks-root` 默认是当前目录。仓库声明顺序必须稳定：第一个仓库是生成的 AI CLI 命令的工作目录，后续仓库作为 additional directories。
+`--tasks-root` 默认是当前目录。仓库声明顺序必须稳定：第一个仓库是生成的 AI CLI 命令的工作目录，后续仓库作为 additional directories。开始前，在每个 source 仓库根目录准备 `.taskflowcopy` 白名单（语法见下文），声明要带进新 worktree 的本地内容。
 
 先预览，确认后执行：
 
@@ -86,9 +86,21 @@ taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
 taskflow --tasks-root ~/tasks delete REFUND-123 --execute
 ```
 
-`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、ownership、worktree、分支或锁目录，也不枚举或读取将要复制的内容；它列出每个仓库的 worktree action 和 source-copy action。新任务的 execute 会在完整 preflight 后写入初始配置、记录 pending source-copy 状态，再用 `git worktree add --no-checkout` 注册缺失的 worktree、把 index 重建为 base 内容，最后把 source 工作目录完整复制进目标。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
+`create` 没有 `--execute` 时默认是 dry-run。dry-run 不创建任务目录、taskflow.yaml、ownership、worktree、分支或锁目录，也不枚举或读取将要复制的内容；它校验每个仓库的 `.taskflowcopy` 并列出 worktree action 和 source-copy action（含清单模式数）。新任务的 execute 会在完整 preflight 后写入初始配置、记录 pending source-copy 状态，再用正常 `git worktree add` 创建缺失的 worktree（完整 base 检出），最后把清单声明的路径从 source 叠加复制进目标。已有任务的 execute 只读取 taskflow.yaml 并创建或复用其中声明的 worktree；只有实际由 Taskflow 创建的 worktree 才会写入 ownership manifest。
 
-复制覆盖 source 工作目录的全部内容：tracked 文件的未提交修改、untracked 文件和 ignored 文件。`git status` 在新 worktree 中因此通常显示为 dirty，这是预期行为。除 source 根目录及任意嵌套层级的 `.git` 条目外不会排除任何文件；嵌套的 Git 元数据（其他 checkout 的注册文件或内嵌仓库）不会被复制。source 和 target 不允许互相包含。完成后的快照不会随 source 后续变化刷新。
+## 白名单清单 `.taskflowcopy`
+
+新 worktree 携带哪些本地内容由每个 source 仓库根目录的 `.taskflowcopy` 决定。清单缺失时 create（dry-run 和 execute）都会以 `SOURCE_COPY_MANIFEST_MISSING` 失败；仅含注释的清单表示不复制任何内容，新 worktree 就是干净的 base 检出。
+
+```text
+# .taskflowcopy —— gitignore 风格，每行一个模式
+config/local.yaml        # 字面量路径
+env/                     # 尾部 / 表示目录，整棵子树复制（不含 .git）
+*.log                    # 不含 / 的模式按 basename 匹配任意层级
+config/*/settings.yaml   # 含 / 的模式相对仓库根匹配；支持 * ? [...] 和 **
+```
+
+匹配的 tracked 文件未提交修改会以普通未暂存修改进入目标，untracked 和 ignored 文件按原状态落地；未列出的 tracked 文件保持 base 内容，source 中已删除的 tracked 文件也不会在目标中被删除（叠加是加法式的）。不支持 `!` 取反；`!`、绝对路径、`..` 等非法模式以 `SOURCE_COPY_MANIFEST_INVALID` 失败。`.git` 元数据（source 根目录及任意嵌套层级）不会复制；source 和 target 不允许互相包含；symlink 原样保留不跟随；fifo/socket 等被携带的特殊文件会以结构化诊断失败。execute 对匹配不到任何 source 路径的字面量模式发出 `SOURCE_COPY_PATTERN_UNMATCHED` warning。完成后的复制是创建时快照，不会随 source 后续变化刷新。
 
 新任务先用带 `--repo` 的 dry-run 预览，用户批准后执行 create；execute 完成后，bundled skill 必须再次运行不带 `--repo` 的 `taskflow create <task-id> --dry-run`，只有所有 repository 都报告 `reuse` 时才生成命令。已有任务也从这次不带 `--repo` 的 dry-run 开始。它使用第一个 worktree 作为 cwd，将后续 worktree 和任务根目录作为绝对路径 `--add-dir` 参数，并按用户目标 shell 进行安全引用和转义：POSIX shell 使用单引号，PowerShell 使用 `Set-Location -LiteralPath` 和 `$env:...`，cmd.exe 使用 `cd /d "..."` 和 `set "...=1"`。复杂 cmd 路径无法可靠转义时改用 PowerShell。命令由用户在自己的终端执行，匹配但 dirty 的 worktree 不会阻止生成。不要加入 `--worktree` 或 `--worktree=...`，避免嵌套 worktree。
 
@@ -100,7 +112,7 @@ taskflow --tasks-root ~/tasks delete REFUND-123 --execute
 taskflow --tasks-root ~/tasks create REFUND-123 --execute
 ```
 
-已存在且 source common directory、branch、target path 都匹配的 worktree 会被复用；缺失的会被创建；不匹配的目标不会被删除或覆盖。若完整复制中断，ownership.json 会保留 pending 的 source-copy 状态；修复外部原因后重试会对该目标重新执行完整复制（pending 目标目录缺失时先重新注册再复制）。完成后的快照是创建时快照，不会随 source 后续变化刷新；pending 期间不要在目标中工作，等待重试完成。
+已存在且 source common directory、branch、target path 都匹配的 worktree 会被复用；缺失的会被创建；不匹配的目标不会被删除或覆盖。若叠加复制中断，ownership.json 会保留 pending 的 source-copy 状态；修复外部原因后重试会对该目标重新执行白名单叠加复制（pending 目标目录缺失时先重新注册再复制）。完成后的复制是创建时快照，不会随 source 后续变化刷新；pending 期间不要在目标中工作，等待重试完成。
 
 已有任务的仓库集合由用户或 AI 直接维护 taskflow.yaml。修改配置后，先运行不带 `--repo` 的 dry-run，再显式执行：
 
@@ -115,7 +127,7 @@ taskflow.yaml 中删除仓库不会删除已有 worktree；修改 source、branc
 
 ## 删除任务
 
-删除默认只预览，不改变 Git 或文件系统。复制的快照通常使 worktree dirty（tracked 修改和 untracked 文件都是普通工作区变更；仅含 ignored 文件的快照按 Git 语义视为干净）：
+删除默认只预览，不改变 Git 或文件系统。复制的白名单内容通常使 worktree dirty（tracked 修改和 untracked 文件都是普通工作区变更；仅含 ignored 文件的复制按 Git 语义视为干净）：
 
 ```bash
 taskflow --tasks-root ~/tasks delete REFUND-123 --dry-run
@@ -165,7 +177,7 @@ repositories:
 ```
 
 `source` 使用绝对路径，`base` 必须在本地可解析，`worktree` 必须位于任务的 `worktrees/` 目录内。Taskflow 不隐式 fetch；请在 source 仓库准备好 base 后再重试 create。
-创建新 worktree 时 source 的完整工作目录会被复制进目标（含 ignored 文件），因此 source 中的敏感或超大未忽略内容也会进入 worktree；dry-run 和 execute 输出都会显示复制 action 及其条目与字节统计。
+创建新 worktree 时只有 `.taskflowcopy` 声明的路径会进入目标；dry-run 和 execute 输出都会显示复制 action、清单模式数，execute 还会显示条目与字节统计。
 
 首次通过 `--repo` 声明仓库时，Taskflow 默认读取该 source 的 `origin/HEAD`，并将其解析到本地可用的远程默认分支作为 base；同时生成 `feature/<task-id>` 分支，但只使用该远程分支的提交作为起点，不建立 upstream 关联。例如 `origin/HEAD` 指向 `origin/main` 时，配置中的 base 是 `origin/main`，但生成的 worktree 分支不会默认关联 `origin/main`；`origin/master` 等其他远程默认分支同理。`origin/HEAD` 缺失或对应引用不可用时，create 会在写入初始配置或创建 worktree 前失败。已存在配置中的显式 `base` 和 `branch` 保持不变；已有配置的后续修改由用户或 AI 直接编辑 YAML。
 
@@ -175,11 +187,11 @@ execute-mode create 会：
 
 1. 获取任务锁；
 2. 按 canonical Git common directory 和 branch 获取 source lock；
-3. 检查所有 source、base、branch 占用、target、worktree identity 和 source/target 复制边界；
+3. 检查所有 source、base、branch 占用、target、worktree identity、source/target 复制边界和 `.taskflowcopy` 清单；
 4. 对新任务通过 atomic write 写入初始 taskflow.yaml 和 pending source-copy 状态；已有任务不重写用户配置；
-5. 只创建缺失的 worktree（`--no-checkout` 注册并将 index 重建为 base），然后复制 source 完整工作目录并在成功后标记 complete。
+5. 只创建缺失的 worktree（正常 base 检出），然后按白名单叠加复制并在成功后标记 complete。
 
-任何 preflight 冲突都会在 Git 或目标文件 mutation 前返回。Taskflow 的 ownership manifest 只记录由 Taskflow 实际创建的 worktree；结构匹配的手工 worktree 可以被 `create` 复用，但不会被注入 source 快照或被 `delete` 清理。
+任何 preflight 冲突都会在 Git 或目标文件 mutation 前返回。Taskflow 的 ownership manifest 只记录由 Taskflow 实际创建的 worktree；结构匹配的手工 worktree 可以被 `create` 复用，但不会被注入内容或被 `delete` 清理。
 
 ## 破坏性兼容边界
 

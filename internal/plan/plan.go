@@ -7,16 +7,17 @@ import (
 )
 
 type Item struct {
-	ID          string               `json:"id"`
-	Repo        string               `json:"repo,omitempty"`
-	Kind        string               `json:"kind"`
-	Description string               `json:"description"`
-	Status      string               `json:"status,omitempty"`
-	Source      string               `json:"source,omitempty"`
-	Target      string               `json:"target,omitempty"`
-	FileCount   int                  `json:"fileCount,omitempty"`
-	TotalBytes  int64                `json:"totalBytes,omitempty"`
-	Reason      string               `json:"reason,omitempty"`
+	ID           string `json:"id"`
+	Repo         string `json:"repo,omitempty"`
+	Kind         string `json:"kind"`
+	Description  string `json:"description"`
+	Status       string `json:"status,omitempty"`
+	Source       string `json:"source,omitempty"`
+	Target       string `json:"target,omitempty"`
+	PatternCount int    `json:"patternCount,omitempty"`
+	FileCount    int    `json:"fileCount,omitempty"`
+	TotalBytes   int64  `json:"totalBytes,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 func Build(task domain.Task) ([]Item, error) {

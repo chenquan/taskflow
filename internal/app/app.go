@@ -60,6 +60,7 @@ type repositoryCreatePlan struct {
 	worktreeStatus string // "create" or "reuse"
 	copyStatus     string // "copy", "repair", or "reuse"
 	owned          *ownership.Worktree
+	manifest       *fsx.Manifest
 }
 
 type createPlan struct {
@@ -211,7 +212,7 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 				res.Fail(report.Diagnostic{Code: "CREATE_WORKTREE_FAILED", Repo: repository.Name, Message: err.Error()})
 				return res, report.ExitPartial
 			}
-			if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, repositoryPlan.target, repository.Base, resolved.trackBase, true); err != nil {
+			if err = s.Git.AddWorktree(ctx, repository.Source, repository.Branch, repositoryPlan.target, repository.Base, resolved.trackBase); err != nil {
 				items[repositoryPlan.worktreeAction].Status = "failed"
 				items[repositoryPlan.copyAction].Status = "blocked"
 				res.Data = createData(resolved.task, items, false)
@@ -223,22 +224,15 @@ func (s Service) Create(ctx context.Context, o CreateOptions) (report.Result, re
 		if repositoryPlan.copyStatus == "reuse" {
 			continue
 		}
-		// `--no-checkout` registration leaves the index empty; populate it
-		// from HEAD before copying so tracked source modifications surface as
-		// normal unstaged changes. The mixed reset is idempotent, so repairs
-		// of interrupted registrations stay correct.
-		if err = s.Git.ResetIndex(ctx, repositoryPlan.target); err != nil {
-			items[repositoryPlan.copyAction].Status = "failed"
-			res.Data = createData(resolved.task, items, false)
-			res.Fail(report.Diagnostic{Code: "SOURCE_INDEX_RESET_FAILED", Repo: repository.Name, Message: err.Error()})
-			return res, report.ExitPartial
-		}
-		stats, err := fsx.CopyTree(repository.Source, repositoryPlan.target)
+		stats, unmatched, err := fsx.Overlay(repository.Source, repositoryPlan.target, repositoryPlan.manifest)
 		if err != nil {
 			items[repositoryPlan.copyAction].Status = "failed"
 			res.Data = createData(resolved.task, items, false)
 			res.Fail(copyDiagnostic(repository.Name, err))
 			return res, report.ExitPartial
+		}
+		for _, pattern := range unmatched {
+			res.Warn(report.Diagnostic{Code: "SOURCE_COPY_PATTERN_UNMATCHED", Repo: repository.Name, Message: fmt.Sprintf("whitelist pattern %q matched no source path", pattern)})
 		}
 		if repositoryPlan.worktreeStatus == "create" {
 			items[repositoryPlan.copyAction].Status = "copied"
@@ -852,6 +846,14 @@ func (s Service) preflightCreate(ctx context.Context, task domain.Task) (*create
 			items[worktreeAction].Description = fmt.Sprintf("REUSE %s -> %s", repository.Name, target)
 		}
 
+		// Manifest readiness is the last per-repository preflight gate: the
+		// copy action can only be planned once the whitelist exists and parses.
+		copyManifest, manifestErr := fsx.LoadManifest(repository.Source)
+		if manifestErr != nil {
+			return nil, manifestDiagnostic(repository.Name, manifestErr), report.ExitEnvironment
+		}
+		items[copyAction].PatternCount = len(copyManifest.Patterns)
+
 		repositoryPlan := repositoryCreatePlan{
 			repository:     repository,
 			sourceInfo:     sourceInfo,
@@ -859,6 +861,7 @@ func (s Service) preflightCreate(ctx context.Context, task domain.Task) (*create
 			worktreeAction: worktreeAction,
 			copyAction:     copyAction,
 			worktreeStatus: items[worktreeAction].Status,
+			manifest:       copyManifest,
 		}
 		owned, hasOwned := ownedByRepo[repository.Name]
 		if hasOwned {
@@ -885,24 +888,38 @@ func (s Service) preflightCreate(ctx context.Context, task domain.Task) (*create
 		default:
 			repositoryPlan.copyStatus = "reuse"
 		}
-		setCopyItem(&items[copyAction], repositoryPlan.copyStatus)
+		setCopyItem(&items[copyAction], repositoryPlan.copyStatus, len(copyManifest.Patterns))
 		prepared.repositories = append(prepared.repositories, repositoryPlan)
 	}
 	return prepared, nil, report.ExitOK
 }
 
-func setCopyItem(item *plan.Item, status string) {
+func setCopyItem(item *plan.Item, status string, patterns int) {
 	item.Status = status
+	item.PatternCount = patterns
 	switch status {
 	case "copy":
-		item.Description = fmt.Sprintf("COPY source %s -> %s", item.Source, item.Target)
+		item.Description = fmt.Sprintf("COPY whitelist (%d patterns) %s -> %s", patterns, item.Source, item.Target)
 	case "repair":
-		item.Description = fmt.Sprintf("REPAIR source copy %s -> %s", item.Source, item.Target)
+		item.Description = fmt.Sprintf("REPAIR whitelist copy (%d patterns) %s -> %s", patterns, item.Source, item.Target)
 	case "reuse":
 		item.Description = fmt.Sprintf("REUSE source copy %s -> %s", item.Source, item.Target)
 	default:
 		item.Description = fmt.Sprintf("SKIP source copy %s", item.Target)
 	}
+}
+
+func manifestDiagnostic(repo string, err error) *report.Diagnostic {
+	code := "SOURCE_COPY_MANIFEST_INVALID"
+	hint := ""
+	var manifestErr *fsx.ManifestError
+	if errors.As(err, &manifestErr) {
+		hint = manifestErr.Path
+		if manifestErr.Missing {
+			code = "SOURCE_COPY_MANIFEST_MISSING"
+		}
+	}
+	return &report.Diagnostic{Code: code, Repo: repo, Message: err.Error(), Hint: hint}
 }
 
 func manifestEntry(manifest *ownership.Manifest, repository, target string) *ownership.Worktree {

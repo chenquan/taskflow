@@ -32,8 +32,20 @@ func makeGitRepo(t *testing.T) string {
 	return dir
 }
 
+func writeCopyManifest(t *testing.T, repo string, lines ...string) {
+	t.Helper()
+	raw := ""
+	for _, line := range lines {
+		raw += line + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreateDryRunDoesNotWrite(t *testing.T) {
 	repo := makeGitRepo(t)
+	writeCopyManifest(t, repo, "# no local content to carry")
 	tasks := t.TempDir()
 	service := New()
 	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "TASK-DRY", Repositories: []string{"repo=" + repo}, DryRun: true})
@@ -94,6 +106,7 @@ func TestCreateRejectsConflictingModes(t *testing.T) {
 
 func TestCreateIsIdempotentAndDoesNotPersistState(t *testing.T) {
 	repo := makeGitRepo(t)
+	writeCopyManifest(t, repo, "# no local content to carry")
 	tasks := t.TempDir()
 	service := New()
 	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "TASK", Repositories: []string{"repo=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
@@ -124,6 +137,7 @@ func TestCreateIsIdempotentAndDoesNotPersistState(t *testing.T) {
 
 func TestCreateRejectsRepositoryArgumentsForExistingTask(t *testing.T) {
 	repo1, repo2 := makeGitRepo(t), makeGitRepo(t)
+	writeCopyManifest(t, repo1, "# no local content to carry")
 	tasks := t.TempDir()
 	service := New()
 	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "EXISTING", Repositories: []string{"one=" + repo1}, Execute: true}); code != report.ExitOK {
@@ -160,6 +174,8 @@ func TestCreateRejectsRepositoryArgumentsForExistingTask(t *testing.T) {
 
 func TestCreateReconcilesDirectConfigurationEditsWithoutDeletingWorktrees(t *testing.T) {
 	repo1, repo2 := makeGitRepo(t), makeGitRepo(t)
+	writeCopyManifest(t, repo1, "# no local content to carry")
+	writeCopyManifest(t, repo2, "# no local content to carry")
 	tasks := t.TempDir()
 	service := New()
 	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "EDIT", Repositories: []string{"one=" + repo1}, Execute: true}); code != report.ExitOK {
@@ -220,6 +236,8 @@ func TestCreateReconcilesDirectConfigurationEditsWithoutDeletingWorktrees(t *tes
 
 func TestCreateRetriesAfterPartialGitFailureWithoutState(t *testing.T) {
 	repo1, repo2 := makeGitRepo(t), makeGitRepo(t)
+	writeCopyManifest(t, repo1, "# no local content to carry")
+	writeCopyManifest(t, repo2, "# no local content to carry")
 	tasks := t.TempDir()
 	failing := &failSecondWorktreeRunner{}
 	service := Service{Runner: failing, Git: git.Client{Runner: failing}}
@@ -277,7 +295,7 @@ func TestCreateRejectsMismatchedTargetBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestCreateCopiesCompleteSourceWorkingTree(t *testing.T) {
+func TestCreateCopiesWhitelistedSourceContent(t *testing.T) {
 	repo := makeGitRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.log\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -304,28 +322,32 @@ func TestCreateCopiesCompleteSourceWorkingTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "ignored.log"), []byte("ignored"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, "extra.txt"), []byte("unlisted"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(repo, "config", "dev"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "config", "dev", "settings local.env"), []byte("debug=true"), 0640); err != nil {
 		t.Fatal(err)
 	}
+	writeCopyManifest(t, repo, "tracked.txt", "untracked.txt", "ignored.log", "config/")
 
 	tasks := t.TempDir()
 	service := New()
-	preview, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Repositories: []string{"app=" + repo}, DryRun: true})
+	preview, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "WHITELIST", Repositories: []string{"app=" + repo}, DryRun: true})
 	if code != report.ExitOK || !preview.OK {
 		t.Fatalf("preview: code=%d result=%#v", code, preview)
 	}
 	previewItems := preview.Data.(map[string]any)["actions"].([]plan.Item)
-	if len(previewItems) != 2 || previewItems[0].Status != "create" || previewItems[1].Kind != "source-copy" || previewItems[1].Status != "copy" {
+	if len(previewItems) != 2 || previewItems[0].Status != "create" || previewItems[1].Kind != "source-copy" || previewItems[1].Status != "copy" || previewItems[1].PatternCount != 4 {
 		t.Fatalf("preview actions: %#v", previewItems)
 	}
-	if _, err := os.Stat(filepath.Join(tasks, "SNAPSHOT")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasks, "WHITELIST")); !os.IsNotExist(err) {
 		t.Fatalf("dry-run changed task root: %v", err)
 	}
 
-	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Repositories: []string{"app=" + repo}, Execute: true})
+	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "WHITELIST", Repositories: []string{"app=" + repo}, Execute: true})
 	if code != report.ExitOK || !result.OK {
 		t.Fatalf("execute: code=%d result=%#v", code, result)
 	}
@@ -333,15 +355,18 @@ func TestCreateCopiesCompleteSourceWorkingTree(t *testing.T) {
 	if len(executeItems) != 2 || executeItems[0].Status != "created" || executeItems[1].Status != "copied" {
 		t.Fatalf("execute actions: %#v", executeItems)
 	}
-	task, err := service.Load(tasks, "SNAPSHOT")
+	task, err := service.Load(tasks, "WHITELIST")
 	if err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(task.Task.Root, task.Repositories[0].Worktree)
 	for _, file := range []string{"tracked.txt", "untracked.txt", "ignored.log", filepath.Join("config", "dev", "settings local.env")} {
 		if _, err := os.Stat(filepath.Join(target, file)); err != nil {
-			t.Fatalf("copied file %s missing: %v", file, err)
+			t.Fatalf("whitelisted file %s missing: %v", file, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(target, "extra.txt")); !os.IsNotExist(err) {
+		t.Fatalf("unlisted file was copied: %v", err)
 	}
 	if contents, err := os.ReadFile(filepath.Join(target, "tracked.txt")); err != nil || string(contents) != "committed\nmodified\n" {
 		t.Fatalf("tracked modification not copied: %q err=%v", contents, err)
@@ -363,7 +388,7 @@ func TestCreateCopiesCompleteSourceWorkingTree(t *testing.T) {
 		t.Fatalf("copied changes are not normal working-tree changes: %q", statusText)
 	}
 	if strings.Contains(statusText, "D ") || strings.Contains(statusText, "D\t") {
-		t.Fatalf("empty index leaked staged deletions: %q", statusText)
+		t.Fatalf("base checkout lost tracked files: %q", statusText)
 	}
 
 	// A completed source copy is a creation-time snapshot: later source
@@ -371,7 +396,7 @@ func TestCreateCopiesCompleteSourceWorkingTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed later\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	second, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "SNAPSHOT", Execute: true})
+	second, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "WHITELIST", Execute: true})
 	if code != report.ExitOK || !second.OK {
 		t.Fatalf("repeat create: code=%d result=%#v", code, second)
 	}
@@ -384,19 +409,24 @@ func TestCreateCopiesCompleteSourceWorkingTree(t *testing.T) {
 	}
 }
 
-func TestCreateKeepsCleanStatusWhenSourceMatchesBase(t *testing.T) {
+func TestCreateCarriesNothingForCommentOnlyManifest(t *testing.T) {
 	repo := makeGitRepo(t)
+	writeCopyManifest(t, repo, "# nothing to carry", "")
 	tasks := t.TempDir()
-	if result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "CLEAN", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
+	result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "EMPTY", Repositories: []string{"app=" + repo}, Execute: true})
+	if code != report.ExitOK || !result.OK {
 		t.Fatalf("create: code=%d result=%#v", code, result)
 	}
-	target := filepath.Join(tasks, "CLEAN", "worktrees", "app")
-	status, err := exec.Command("git", "-C", target, "status", "--porcelain").CombinedOutput()
+	items := result.Data.(map[string]any)["actions"].([]plan.Item)
+	if len(items) != 2 || items[0].Status != "created" || items[1].Status != "copied" || items[1].FileCount != 0 || items[1].TotalBytes != 0 {
+		t.Fatalf("comment-only manifest actions: %#v", items)
+	}
+	status, err := exec.Command("git", "-C", filepath.Join(tasks, "EMPTY", "worktrees", "app"), "status", "--porcelain").CombinedOutput()
 	if err != nil {
 		t.Fatalf("target status: %v: %s", err, status)
 	}
 	if len(strings.TrimSpace(string(status))) != 0 {
-		t.Fatalf("target of a clean source is dirty: %q", status)
+		t.Fatalf("comment-only manifest produced a dirty worktree: %q", status)
 	}
 }
 
@@ -405,7 +435,7 @@ func TestCreateExcludesNestedGitMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"-C", repo, "add", "tracked.txt"}, {"-C", repo, "commit", "-m", "tracked"}} {
+	for _, args := range [][]string{{"-C", repo, "add", "tracked.txt"}, {"-C", repo, "commit", "-m", "tracked"}, {"-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"}} {
 		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
@@ -419,13 +449,20 @@ func TestCreateExcludesNestedGitMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "sub", ".git", "HEAD"), []byte("embedded"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, "sub", "keep.txt"), []byte("keep"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeCopyManifest(t, repo, "wt-nested/", "sub/")
 	tasks := t.TempDir()
 	if result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "NESTED", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
 		t.Fatalf("create: code=%d result=%#v", code, result)
 	}
 	target := filepath.Join(tasks, "NESTED", "worktrees", "app")
+	if contents, err := os.ReadFile(filepath.Join(target, "tracked.txt")); err != nil || string(contents) != "base" {
+		t.Fatalf("unlisted tracked file lost its base checkout: %q err=%v", contents, err)
+	}
 	if _, err := os.Stat(filepath.Join(target, "wt-nested", "tracked.txt")); err != nil {
-		t.Fatalf("nested working files were not copied: %v", err)
+		t.Fatalf("listed nested working files were not copied: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(target, "wt-nested", ".git")); !os.IsNotExist(err) {
 		t.Fatalf("nested worktree registration was copied: %v", err)
@@ -433,10 +470,14 @@ func TestCreateExcludesNestedGitMetadata(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "sub", ".git")); !os.IsNotExist(err) {
 		t.Fatalf("embedded repository metadata was copied: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(target, "sub", "keep.txt")); err != nil {
+		t.Fatalf("listed sibling working file missing: %v", err)
+	}
 }
 
 func TestCreateDoesNotCopyIntoMatchingManualWorktree(t *testing.T) {
 	repo := makeGitRepo(t)
+	writeCopyManifest(t, repo, "local.env")
 	if err := os.WriteFile(filepath.Join(repo, "local.env"), []byte("local"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +488,7 @@ func TestCreateDoesNotCopyIntoMatchingManualWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := git.Client{Runner: execx.OSRunner{}}
-	if err := client.AddWorktree(context.Background(), repo, "feature/manual", target, "HEAD", false, false); err != nil {
+	if err := client.AddWorktree(context.Background(), repo, "feature/manual", target, "HEAD", false); err != nil {
 		t.Fatal(err)
 	}
 	task := domain.Task{
@@ -489,6 +530,7 @@ func TestCreateRepairsPendingSourceCopyWithoutRecreatingWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "two.env"), []byte("two"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	writeCopyManifest(t, repo, "one.env", "two.env")
 	tasks := t.TempDir()
 	service := New()
 	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "PENDING", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
@@ -532,6 +574,7 @@ func TestCreateRegistersMissingPendingTargetBeforeCopying(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("notes"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	writeCopyManifest(t, repo, "notes.txt")
 	tasks := t.TempDir()
 	service := New()
 	if result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "MISSING", Repositories: []string{"app=" + repo}, Execute: true}); code != report.ExitOK || !result.OK {
@@ -590,6 +633,7 @@ func TestCreateRejectsSourceTargetOverlapBeforeMutation(t *testing.T) {
 
 func TestLoadRejectsLegacyRuntimeArtifacts(t *testing.T) {
 	repo := makeGitRepo(t)
+	writeCopyManifest(t, repo, "# no local content to carry")
 	tasks := t.TempDir()
 	service := New()
 	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "LEGACY", Repositories: []string{"repo=" + repo}, Execute: true}); code != report.ExitOK {
@@ -631,6 +675,7 @@ func TestDeleteRejectsInvalidArgumentsAndMissingTask(t *testing.T) {
 
 func TestDeleteRejectsInvalidOwnership(t *testing.T) {
 	repo := makeGitRepo(t)
+	writeCopyManifest(t, repo, "# no local content to carry")
 	tasks := t.TempDir()
 	service := New()
 	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "OWNERSHIP", Repositories: []string{"repo=" + repo}, Execute: true}); code != report.ExitOK {
@@ -654,6 +699,7 @@ func TestDeleteRejectsInvalidOwnership(t *testing.T) {
 
 func TestDeleteRejectsConfigurationOwnershipMismatchAndProtectedBranch(t *testing.T) {
 	repo := makeGitRepo(t)
+	writeCopyManifest(t, repo, "# no local content to carry")
 	tasks := t.TempDir()
 	service := New()
 	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "MISMATCH", Repositories: []string{"repo=" + repo}, Execute: true}); code != report.ExitOK {
@@ -694,6 +740,7 @@ func TestDeleteRejectsConfigurationOwnershipMismatchAndProtectedBranch(t *testin
 
 func TestDeleteHandlesAlreadyRemovedOwnedResources(t *testing.T) {
 	repo := makeGitRepo(t)
+	writeCopyManifest(t, repo, "# no local content to carry")
 	tasks := t.TempDir()
 	service := New()
 	if _, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "ALREADY-REMOVED", Repositories: []string{"repo=" + repo}, Execute: true}); code != report.ExitOK {
@@ -716,6 +763,72 @@ func TestDeleteHandlesAlreadyRemovedOwnedResources(t *testing.T) {
 	}
 	if _, err := os.Stat(taskRoot); !os.IsNotExist(err) {
 		t.Fatalf("task root remains: %v", err)
+	}
+}
+
+func TestCreateFailsLoudlyWithoutManifest(t *testing.T) {
+	repo := makeGitRepo(t)
+	tasks := t.TempDir()
+	service := New()
+	preview, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "NOMANIFEST", Repositories: []string{"app=" + repo}, DryRun: true})
+	if code != report.ExitEnvironment || preview.OK || !hasDiagnostic(preview.Errors, "SOURCE_COPY_MANIFEST_MISSING") {
+		t.Fatalf("dry-run without manifest: code=%d result=%#v", code, preview)
+	}
+	if diagnosticHint(preview.Errors, "SOURCE_COPY_MANIFEST_MISSING") == "" {
+		t.Fatalf("missing-manifest diagnostic has no hint: %#v", preview.Errors)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "NOMANIFEST")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created task directory: %v", err)
+	}
+	result, code := service.Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "NOMANIFEST", Repositories: []string{"app=" + repo}, Execute: true})
+	if code != report.ExitEnvironment || result.OK || !hasDiagnostic(result.Errors, "SOURCE_COPY_MANIFEST_MISSING") {
+		t.Fatalf("execute without manifest: code=%d result=%#v", code, result)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "NOMANIFEST")); !os.IsNotExist(err) {
+		t.Fatalf("failed create created task directory: %v", err)
+	}
+	worktrees, err := service.Git.Worktrees(context.Background(), repo)
+	if err != nil || len(worktrees) != 1 {
+		t.Fatalf("failed create registered a worktree: err=%v worktrees=%#v", err, worktrees)
+	}
+}
+
+func TestCreateRejectsInvalidManifest(t *testing.T) {
+	repo := makeGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("!keep.txt\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	preview, code := New().Create(context.Background(), CreateOptions{TasksRoot: t.TempDir(), TaskID: "BADMANIFEST", Repositories: []string{"app=" + repo}, DryRun: true})
+	if code != report.ExitEnvironment || preview.OK || !hasDiagnostic(preview.Errors, "SOURCE_COPY_MANIFEST_INVALID") {
+		t.Fatalf("invalid manifest: code=%d result=%#v", code, preview)
+	}
+}
+
+func TestCreateWarnsOnUnmatchedLiteralPattern(t *testing.T) {
+	repo := makeGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "present.env"), []byte("present"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeCopyManifest(t, repo, "present.env", "missing.env", "missing-dir/")
+	tasks := t.TempDir()
+	result, code := New().Create(context.Background(), CreateOptions{TasksRoot: tasks, TaskID: "WARN", Repositories: []string{"app=" + repo}, Execute: true})
+	if code != report.ExitOK || !result.OK {
+		t.Fatalf("create with unmatched literals: code=%d result=%#v", code, result)
+	}
+	warned := 0
+	for _, warning := range result.Warnings {
+		if warning.Code != "SOURCE_COPY_PATTERN_UNMATCHED" || warning.Repo != "app" {
+			t.Fatalf("unexpected warning: %#v", warning)
+		}
+		if strings.Contains(warning.Message, "missing.env") || strings.Contains(warning.Message, "missing-dir/") {
+			warned++
+		}
+	}
+	if warned != 2 {
+		t.Fatalf("expected two unmatched-pattern warnings, got %d in %#v", warned, result.Warnings)
+	}
+	if _, err := os.Stat(filepath.Join(tasks, "WARN", "worktrees", "app", "present.env")); err != nil {
+		t.Fatalf("matched file missing: %v", err)
 	}
 }
 
@@ -745,6 +858,15 @@ func hasDiagnostic(diagnostics []report.Diagnostic, code string) bool {
 		}
 	}
 	return false
+}
+
+func diagnosticHint(diagnostics []report.Diagnostic, code string) string {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return diagnostic.Hint
+		}
+	}
+	return ""
 }
 
 type failSecondWorktreeRunner struct {

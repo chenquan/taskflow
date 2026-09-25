@@ -21,11 +21,11 @@ type Manifest struct {
 }
 
 type Worktree struct {
-	Repository string   `json:"repository"`
-	Source     string   `json:"source"`
-	CommonDir  string   `json:"commonDir"`
-	Branch     string   `json:"branch"`
-	Target     string   `json:"target"`
+	Repository string      `json:"repository"`
+	Source     string      `json:"source"`
+	CommonDir  string      `json:"commonDir"`
+	Branch     string      `json:"branch"`
+	Target     string      `json:"target"`
 	SourceCopy *SourceCopy `json:"sourceCopy,omitempty"`
 }
 

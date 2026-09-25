@@ -19,6 +19,9 @@ func TestE2EBuiltBinaryReportsSourceCopyAction(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, localName), []byte("PORT=4310\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("local settings.env\nmissing.env\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	tasks := t.TempDir()
 	binaryName := "taskflow"
 	if runtime.GOOS == "windows" {
@@ -54,17 +57,18 @@ func TestE2EBuiltBinaryReportsSourceCopyAction(t *testing.T) {
 	}
 	var data struct {
 		Actions []struct {
-			Kind      string `json:"kind"`
-			Status    string `json:"status"`
-			Source    string `json:"source"`
-			Target    string `json:"target"`
-			FileCount int    `json:"fileCount"`
+			Kind         string `json:"kind"`
+			Status       string `json:"status"`
+			Source       string `json:"source"`
+			Target       string `json:"target"`
+			PatternCount int    `json:"patternCount"`
+			FileCount    int    `json:"fileCount"`
 		} `json:"actions"`
 	}
 	if err := json.Unmarshal(envelope.Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if len(data.Actions) != 2 || data.Actions[0].Kind != "worktree" || data.Actions[0].Status != "create" || data.Actions[1].Kind != "source-copy" || data.Actions[1].Status != "copy" {
+	if len(data.Actions) != 2 || data.Actions[0].Kind != "worktree" || data.Actions[0].Status != "create" || data.Actions[1].Kind != "source-copy" || data.Actions[1].Status != "copy" || data.Actions[1].PatternCount != 2 {
 		t.Fatalf("binary source-copy preview: %#v", data.Actions)
 	}
 	if data.Actions[1].Source == "" || filepath.Base(data.Actions[1].Source) != "repo" || !strings.HasSuffix(data.Actions[1].Target, filepath.Join("BINARY", "worktrees", "app")) {
@@ -76,10 +80,13 @@ func TestE2EBuiltBinaryReportsSourceCopyAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	encodedRepoText := string(encodedRepo[1 : len(encodedRepo)-1])
-	if !strings.Contains(string(textPreview), "COPY source") || !strings.Contains(string(textPreview), encodedRepoText) {
+	if !strings.Contains(string(textPreview), "COPY whitelist") || !strings.Contains(string(textPreview), encodedRepoText) {
 		t.Fatalf("binary text source-copy preview: %s", textPreview)
 	}
-	run("--tasks-root", tasks, "--json", "create", "BINARY", "--repo", "app="+repo, "--execute")
+	executeOutput := run("--tasks-root", tasks, "--json", "create", "BINARY", "--repo", "app="+repo, "--execute")
+	if !strings.Contains(string(executeOutput), "SOURCE_COPY_PATTERN_UNMATCHED") || !strings.Contains(string(executeOutput), "missing.env") {
+		t.Fatalf("binary execute did not warn on the unmatched literal: %s", executeOutput)
+	}
 	copied, err := os.ReadFile(filepath.Join(tasks, "BINARY", "worktrees", "app", localName))
 	if err != nil || string(copied) != "PORT=4310\n" {
 		t.Fatalf("binary source copy is incomplete: %q err=%v", copied, err)

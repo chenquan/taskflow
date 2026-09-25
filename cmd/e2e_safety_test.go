@@ -31,6 +31,9 @@ func e2eGitRepo(t *testing.T) string {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(dir, ".taskflowcopy"), []byte("# no local content to carry\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
@@ -271,6 +274,9 @@ func TestE2EDeleteRefusesUnownedAndDirtyWorktrees(t *testing.T) {
 
 func TestE2EDeleteTreatsCopiedSnapshotAsDirty(t *testing.T) {
 	repo := e2eGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("local.env\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(repo, "local.env"), []byte("local"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -327,6 +333,51 @@ func TestE2EDeleteRequiresKnownDefaultBranch(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasks, "NODEFAULT")); err != nil {
 		t.Fatalf("default branch refusal changed task root: %v", err)
+	}
+}
+
+func TestE2EWhitelistDrivesSourceCopy(t *testing.T) {
+	repo := e2eGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "settings.env"), []byte("A=1"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "secrets.env"), []byte("S=1"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".taskflowcopy"), []byte("settings.env\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tasks := t.TempDir()
+	if output, err := runE2E(t, tasks, "create", "WL", "--repo", "repo="+repo, "--execute"); err != nil {
+		t.Fatalf("create: %v: %s", err, output)
+	}
+	target := filepath.Join(tasks, "WL", "worktrees", "repo")
+	if _, err := os.Stat(filepath.Join(target, "settings.env")); err != nil {
+		t.Fatalf("whitelisted file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "secrets.env")); !os.IsNotExist(err) {
+		t.Fatalf("unlisted file was copied: %v", err)
+	}
+}
+
+func TestE2EMissingManifestFailsWithoutMutation(t *testing.T) {
+	repo := e2eGitRepo(t)
+	if err := os.Remove(filepath.Join(repo, ".taskflowcopy")); err != nil {
+		t.Fatal(err)
+	}
+	tasks := t.TempDir()
+	for _, mode := range []string{"--dry-run", "--execute"} {
+		output, err := runE2E(t, tasks, "--json", "create", "NOMF", "--repo", "repo="+repo, mode)
+		if err == nil || !strings.Contains(output, "SOURCE_COPY_MANIFEST_MISSING") {
+			t.Fatalf("expected manifest refusal (%s): err=%v output=%s", mode, err, output)
+		}
+		if _, statErr := os.Stat(filepath.Join(tasks, "NOMF")); !os.IsNotExist(statErr) {
+			t.Fatalf("create mutated task root (%s): %v", mode, statErr)
+		}
+	}
+	worktrees, err := (git.Client{Runner: gitRunner()}).Worktrees(context.Background(), repo)
+	if err != nil || len(worktrees) != 1 {
+		t.Fatalf("failed create registered worktrees: %v: %#v", err, worktrees)
 	}
 }
 

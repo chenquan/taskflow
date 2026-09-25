@@ -18,7 +18,7 @@ type CopyStats struct {
 // CopyError identifies the failing copy operation and the path relative to the
 // copied root so diagnostics stay stable across platforms.
 type CopyError struct {
-	Op   string // boundary, lstat, mkdir, readlink, symlink, open, create, read, write, chmod, unsupported-entry
+	Op   string // boundary, manifest, lstat, mkdir, readlink, symlink, open, create, read, write, chmod, unsupported-entry
 	Path string // relative to the copied root; "." denotes the roots themselves
 	Err  error
 }
@@ -32,20 +32,29 @@ func (e *CopyError) Error() string {
 
 func (e *CopyError) Unwrap() error { return e.Err }
 
-// CopyTree copies the complete contents of source into target. Every `.git`
-// entry — the root entry and any entry at a nested depth — is excluded so the
-// target keeps only its own Git metadata. Regular-file and directory
-// permission bits are preserved, symlinks are reproduced without following
-// them, and any other entry type fails the copy. Source and target must not
-// contain one another.
-func CopyTree(source, target string) (CopyStats, error) {
+// Overlay copies the manifest-matched source paths into target. The walk
+// carries a matched directory's whole subtree, creates missing parent
+// directories of carried entries, and reports literal patterns that matched no
+// source path. Every `.git` entry — the root entry and any entry at a nested
+// depth — is excluded so the target keeps only its own Git metadata. Regular
+// file and directory permission bits are preserved, symlinks are reproduced
+// without following them, and any other carried entry type fails the copy.
+// Source and target must not contain one another.
+func Overlay(source, target string, manifest *Manifest) (CopyStats, []string, error) {
+	if manifest == nil {
+		return CopyStats{}, nil, &CopyError{Op: "manifest", Err: fmt.Errorf("no copy manifest was loaded")}
+	}
 	if Within(source, target) || Within(target, source) {
-		return CopyStats{}, &CopyError{Op: "boundary", Err: fmt.Errorf("source %q and target %q must not contain one another", source, target)}
+		return CopyStats{}, nil, &CopyError{Op: "boundary", Err: fmt.Errorf("source %q and target %q must not contain one another", source, target)}
 	}
 	if err := os.MkdirAll(target, 0755); err != nil {
-		return CopyStats{}, &CopyError{Op: "mkdir", Path: ".", Err: err}
+		return CopyStats{}, nil, &CopyError{Op: "mkdir", Path: ".", Err: err}
 	}
 	var stats CopyStats
+	literalHits := make([]bool, len(manifest.Patterns))
+	// carried marks directories whose subtree is copied wholesale because the
+	// directory itself or an ancestor matched.
+	carried := map[string]bool{}
 	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return &CopyError{Op: "lstat", Path: relativePath(source, path), Err: walkErr}
@@ -59,26 +68,43 @@ func CopyTree(source, target string) (CopyStats, error) {
 			}
 			return nil
 		}
+		if relative == "." {
+			return nil
+		}
+		isDir := entry.IsDir()
+		directlyMatched := manifest.Select(filepath.ToSlash(relative), isDir, literalHits)
+		if !directlyMatched && !carried[filepath.Dir(relative)] {
+			return nil
+		}
+		// Record ancestor-carried directories too, so deeper descendants see
+		// the wholesale carry without re-deriving the ancestor chain.
+		if isDir {
+			carried[relative] = true
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return &CopyError{Op: "lstat", Path: relative, Err: err}
 		}
+		destination := filepath.Join(target, filepath.FromSlash(relative))
 		switch {
-		case entry.IsDir():
-			if relative == "." {
-				return nil
-			}
-			if err := os.Mkdir(filepath.Join(target, filepath.FromSlash(relative)), info.Mode().Perm()); err != nil && !os.IsExist(err) {
+		case isDir:
+			if err := os.MkdirAll(destination, info.Mode().Perm()); err != nil {
 				return &CopyError{Op: "mkdir", Path: relative, Err: err}
 			}
 			stats.Entries++
 		case info.Mode()&fs.ModeSymlink != 0:
+			if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+				return &CopyError{Op: "mkdir", Path: relative, Err: err}
+			}
 			if err := copySymlink(source, target, relative); err != nil {
 				return err
 			}
 			stats.Entries++
 		case info.Mode().IsRegular():
-			written, err := copyRegularFile(path, filepath.Join(target, filepath.FromSlash(relative)), info.Mode().Perm())
+			if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+				return &CopyError{Op: "mkdir", Path: relative, Err: err}
+			}
+			written, err := copyRegularFile(path, destination, info.Mode().Perm())
 			if err != nil {
 				if copyErr, ok := err.(*CopyError); ok {
 					if copyErr.Path == "" || copyErr.Path == "." {
@@ -96,9 +122,15 @@ func CopyTree(source, target string) (CopyStats, error) {
 		return nil
 	})
 	if err != nil {
-		return stats, err
+		return stats, nil, err
 	}
-	return stats, nil
+	var unmatched []string
+	for index, pattern := range manifest.Patterns {
+		if pattern.Literal && !literalHits[index] {
+			unmatched = append(unmatched, pattern.Raw)
+		}
+	}
+	return stats, unmatched, nil
 }
 
 func copySymlink(source, target, relative string) error {
