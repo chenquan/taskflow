@@ -75,13 +75,19 @@ func TestE2EBuiltBinaryReportsSourceCopyAction(t *testing.T) {
 		t.Fatalf("source-copy action paths: %#v", data.Actions[1])
 	}
 	textPreview := run("--tasks-root", tasks, "create", "BINARY", "--repo", "app="+repo, "--dry-run")
-	encodedRepo, err := json.Marshal(repo)
+	if !strings.Contains(string(textPreview), "COPY whitelist") {
+		t.Fatalf("binary text source-copy preview is missing the whitelist copy action: %s", textPreview)
+	}
+	// The text envelope renders the same resolved configuration as the JSON
+	// preview, so the JSON-escaped form of the canonical source path is the
+	// reliable needle regardless of platform path separators.
+	escapedSource, err := json.Marshal(data.Actions[1].Source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	encodedRepoText := string(encodedRepo[1 : len(encodedRepo)-1])
-	if !strings.Contains(string(textPreview), "COPY whitelist") || !strings.Contains(string(textPreview), encodedRepoText) {
-		t.Fatalf("binary text source-copy preview: %s", textPreview)
+	escapedSourceText := string(escapedSource[1 : len(escapedSource)-1])
+	if !strings.Contains(string(textPreview), escapedSourceText) {
+		t.Fatalf("binary text source-copy preview is missing the source path: repo=%q canonical=%q escaped=%q output=%s", repo, data.Actions[1].Source, escapedSourceText, textPreview)
 	}
 	executeOutput := run("--tasks-root", tasks, "--json", "create", "BINARY", "--repo", "app="+repo, "--execute")
 	if !strings.Contains(string(executeOutput), "SOURCE_COPY_PATTERN_UNMATCHED") || !strings.Contains(string(executeOutput), "missing.env") {
