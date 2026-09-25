@@ -8,7 +8,7 @@ This change supersedes `copy-source-working-tree` (implemented on this branch, n
 
 **Goals:**
 
-- Copy exactly the paths declared in a per-repository `.taskflowinclude` whitelist into newly created worktrees; nothing else.
+- Copy exactly the paths declared in a per-repository `.worktreeinclude` whitelist into newly created worktrees; nothing else.
 - Keep the manifest versionable and reviewable inside the source repository, with zero taskflow.yaml surface.
 - Keep tracked modifications, untracked files, and ignored files all carryable — the whitelist selects paths, not Git classifications.
 - Keep the existing dry-run, locking, target-identity, reuse, ownership-manifest, and deletion safety rules unchanged.
@@ -31,7 +31,7 @@ The complete copy needed `--no-checkout` and a mixed index reset because it over
 
 **Alternative considered:** keeping `--no-checkout` and materializing base with `read-tree` + `checkout-index`. Equivalent outcome, more moving parts, no benefit.
 
-### 2. `.taskflowinclude` at the source repository root, required for new worktrees
+### 2. `.worktreeinclude` at the source repository root, required for new worktrees
 
 The manifest is a dotfile in the repo it describes, so it is versioned, reviewed, and shared with the repository — the people who know which local files matter maintain the list next to the code. Taskflow reads it read-only at create time. A missing manifest fails dry-run and execute with `SOURCE_COPY_MANIFEST_MISSING` before any mutation; a manifest containing only comments means "copy nothing" and must be created deliberately. Copy completeness still derives from the repository-level `pending`/`complete` `SourceCopy` status in the ownership manifest, unchanged from the predecessor design.
 

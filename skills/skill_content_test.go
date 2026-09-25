@@ -15,7 +15,7 @@ func TestTaskflowSkillGuidesCreateNativeToolsAndDelete(t *testing.T) {
 		"create <task-id>",
 		"create <task-id> --execute",
 		"source-copy action",
-		".taskflowinclude",
+		".worktreeinclude",
 		"白名单",
 		"ignored 文件",
 		".git",

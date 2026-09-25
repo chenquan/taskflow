@@ -16,7 +16,7 @@ func TestCreateFlowRunsWithoutOpenSpec(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".taskflowinclude"), []byte("# no local content to carry\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".worktreeinclude"), []byte("# no local content to carry\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	tasks := t.TempDir()

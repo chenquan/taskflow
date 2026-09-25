@@ -5,7 +5,7 @@ description: 用 Taskflow 安全创建和清理多 Git 仓库 worktree 工作区
 
 # Taskflow 工作区向导
 
-Taskflow 负责三件事：根据声明创建或复用安全的 Git worktree，按各 source 仓库的 `.taskflowinclude` 白名单把本地内容复制进新建的 Taskflow worktree，以及清理有明确 ownership 记录的任务资源。对于 AI CLI，先检查工作区，再生成由用户执行的原生 Codex 或 Claude 命令。不要用手写 Git 或文件系统命令、shell copy 或覆盖操作替代这些流程。
+Taskflow 负责三件事：根据声明创建或复用安全的 Git worktree，按各 source 仓库的 `.worktreeinclude` 白名单把本地内容复制进新建的 Taskflow worktree，以及清理有明确 ownership 记录的任务资源。对于 AI CLI，先检查工作区，再生成由用户执行的原生 Codex 或 Claude 命令。不要用手写 Git 或文件系统命令、shell copy 或覆盖操作替代这些流程。
 
 ## 定位任务
 
@@ -24,7 +24,7 @@ taskflow --json --tasks-root <tasks-root> create <task-id> \
   --dry-run
 ```
 
-向用户说明仓库顺序、目标路径、`create`/`reuse` action、source-copy action（含清单模式数）和冲突。仓库缺少 `.taskflowinclude` 时，先与用户确认需要的本地路径并创建清单，再运行 dry-run。只有用户明确批准后才执行：
+向用户说明仓库顺序、目标路径、`create`/`reuse` action、source-copy action（含清单模式数）和冲突。仓库缺少 `.worktreeinclude` 时，先与用户确认需要的本地路径并创建清单，再运行 dry-run。只有用户明确批准后才执行：
 
 ```bash
 taskflow --json --tasks-root <tasks-root> create <task-id> \
@@ -33,7 +33,7 @@ taskflow --json --tasks-root <tasks-root> create <task-id> \
   --execute
 ```
 
-创建新 worktree 前，先确认每个 source 仓库根目录都有 `.taskflowinclude` 白名单文件。它按 gitignore 风格声明要复制进新 worktree 的本地路径：`#` 注释和空行忽略；尾部 `/` 表示目录；含 `/` 的模式相对仓库根匹配；不含 `/` 的模式按 basename 匹配任意层级；支持 `*`、`?`、`[...]`、`**`，不支持 `!` 取反。缺少清单时 create 会失败（`SOURCE_COPY_MANIFEST_MISSING`），仅含注释的清单表示不复制任何内容。创建时 Taskflow 用正常 `git worktree add` 检出 base，再把清单匹配的路径从 source 叠加复制进目标：listed tracked 修改表现为普通未暂存修改，untracked 和 ignored 文件按原状态落地；未列出的 tracked 文件保持 base 内容；source 中已删除的 tracked 文件不会在目标中被删除（叠加是加法式的）。`.git` 元数据（source 根目录及任意嵌套层级）不会复制，目标保留自己的 Git 元数据。executed copy 对匹配不到任何 source 路径的字面量模式发出 warning，必须向用户报告。执行会先检查所有 source、base ref、branch 占用、target path、worktree identity、source/target 边界和清单语法，再写 taskflow.yaml、ownership.json 或运行 Git 命令。它不会删除、移动、reset 或覆盖现有路径；复用的手工 worktree 不会获得 ownership，也不会被注入内容。
+创建新 worktree 前，先确认每个 source 仓库根目录都有 `.worktreeinclude` 白名单文件。它按 gitignore 风格声明要复制进新 worktree 的本地路径：`#` 注释和空行忽略；尾部 `/` 表示目录；含 `/` 的模式相对仓库根匹配；不含 `/` 的模式按 basename 匹配任意层级；支持 `*`、`?`、`[...]`、`**`，不支持 `!` 取反。缺少清单时 create 会失败（`SOURCE_COPY_MANIFEST_MISSING`），仅含注释的清单表示不复制任何内容。创建时 Taskflow 用正常 `git worktree add` 检出 base，再把清单匹配的路径从 source 叠加复制进目标：listed tracked 修改表现为普通未暂存修改，untracked 和 ignored 文件按原状态落地；未列出的 tracked 文件保持 base 内容；source 中已删除的 tracked 文件不会在目标中被删除（叠加是加法式的）。`.git` 元数据（source 根目录及任意嵌套层级）不会复制，目标保留自己的 Git 元数据。executed copy 对匹配不到任何 source 路径的字面量模式发出 warning，必须向用户报告。执行会先检查所有 source、base ref、branch 占用、target path、worktree identity、source/target 边界和清单语法，再写 taskflow.yaml、ownership.json 或运行 Git 命令。它不会删除、移动、reset 或覆盖现有路径；复用的手工 worktree 不会获得 ownership，也不会被注入内容。
 
 dry-run 必须逐项审阅 worktree action 和 source-copy action（含清单模式数），确认 source、target 与复制范围。`.git`、source 与 target 互相包含、路径逃逸和特殊文件都应在 execute 前修复，而不是通过 shell copy 绕过。
 
@@ -134,7 +134,7 @@ Codex 使用相同的 cwd、路径引用和 `--add-dir` 参数，只需将工具
 - `OWNERSHIP_NOT_FOUND`、`OWNERSHIP_MISMATCH`：该任务包含手工管理或配置已变化的 worktree，Taskflow 不自动删除；先人工确认资源归属。
 - `WORKTREE_DIRTY`、`PROTECTED_BRANCH`、`DEFAULT_BRANCH_UNKNOWN`、`DELETE_DIRECTORY_UNSAFE`：保留现场并修复冲突；不要直接使用 `--force`，除非用户明确授权。
 - `SOURCE_BRANCH_LOCKED`、`TASK_LOCKED`：报告锁冲突，等待占用操作完成后重试，不删除锁文件。
-- `SOURCE_COPY_MANIFEST_MISSING`：source 仓库缺少 `.taskflowinclude`；与用户确认需要的本地路径，创建清单后重试，不要绕过或手工复制。
+- `SOURCE_COPY_MANIFEST_MISSING`：source 仓库缺少 `.worktreeinclude`；与用户确认需要的本地路径，创建清单后重试，不要绕过或手工复制。
 - `SOURCE_COPY_MANIFEST_INVALID`：清单语法非法（取反模式、绝对路径、`..` 逃逸、空段等）；按 message 中的行号修复后重试。
 - `SOURCE_COPY_PATTERN_UNMATCHED`：字面量模式没有匹配任何 source 路径；向用户报告疑似拼写错误，必要时修正清单。
 - `CREATE_WORKTREE_FAILED`：保留当前 taskflow.yaml、ownership.json 和已创建 worktree，修复外部原因后重试 create。
